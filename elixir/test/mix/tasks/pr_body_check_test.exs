@@ -73,7 +73,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails when template is missing" do
     in_temp_repo(fn ->
-      File.write!("body.md", @valid_body)
+      File.write!("body.md", valid_body())
 
       assert_raise Mix.Error, ~r/Unable to read PR template/, fn ->
         Check.run(["lint", "--file", "body.md"])
@@ -84,7 +84,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
   test "fails when template has no headings" do
     in_temp_repo(fn ->
       write_template!("no headings here")
-      File.write!("body.md", @valid_body)
+      File.write!("body.md", valid_body())
 
       assert_raise Mix.Error, ~r/No markdown headings found/, fn ->
         Check.run(["lint", "--file", "body.md"])
@@ -94,7 +94,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails when body file is missing" do
     in_temp_repo(fn ->
-      write_template!(@template)
+      write_template!(template())
 
       assert_raise Mix.Error, ~r/Unable to read missing\.md/, fn ->
         Check.run(["lint", "--file", "missing.md"])
@@ -104,8 +104,8 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails when body still has placeholders" do
     in_temp_repo(fn ->
-      write_template!(@template)
-      File.write!("body.md", @template)
+      write_template!(template())
+      File.write!("body.md", template())
 
       error_output =
         capture_io(:stderr, fn ->
@@ -120,9 +120,9 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails when heading is missing" do
     in_temp_repo(fn ->
-      write_template!(@template)
+      write_template!(template())
 
-      missing_heading = String.replace(@valid_body, "#### Alternatives\n\n- Alternative considered.\n\n", "")
+      missing_heading = String.replace(valid_body(), "#### Alternatives\n\n- Alternative considered.\n\n", "")
       File.write!("body.md", missing_heading)
 
       error_output =
@@ -138,7 +138,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails when headings are out of order" do
     in_temp_repo(fn ->
-      write_template!(@template)
+      write_template!(template())
 
       out_of_order = """
       #### TL;DR
@@ -177,9 +177,9 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails on empty section" do
     in_temp_repo(fn ->
-      write_template!(@template)
+      write_template!(template())
 
-      empty_context = String.replace(@valid_body, "Context text.", "")
+      empty_context = String.replace(valid_body(), "Context text.", "")
       File.write!("body.md", empty_context)
 
       error_output =
@@ -195,7 +195,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails when a middle section is blank before the next heading" do
     in_temp_repo(fn ->
-      write_template!(@template)
+      write_template!(template())
 
       blank_alternatives = """
       #### Context
@@ -233,7 +233,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails when bullet and checkbox expectations are not met" do
     in_temp_repo(fn ->
-      write_template!(@template)
+      write_template!(template())
 
       invalid_body = """
       #### Context
@@ -275,7 +275,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails when heading has no content delimiter" do
     in_temp_repo(fn ->
-      write_template!(@template)
+      write_template!(template())
       File.write!("body.md", "#### Context\nContext text.")
 
       capture_io(:stderr, fn ->
@@ -288,7 +288,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "fails when heading appears at end of file" do
     in_temp_repo(fn ->
-      write_template!(@template)
+      write_template!(template())
       File.write!("body.md", "#### Context")
 
       error_output =
@@ -304,8 +304,8 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   test "passes for valid body" do
     in_temp_repo(fn ->
-      write_template!(@template)
-      File.write!("body.md", @valid_body)
+      write_template!(template())
+      File.write!("body.md", valid_body())
 
       output =
         capture_io(fn ->
@@ -337,5 +337,12 @@ defmodule Mix.Tasks.PrBody.CheckTest do
   defp write_template!(content) do
     File.mkdir_p!(".github")
     File.write!(".github/pull_request_template.md", content)
+  end
+
+  defp template, do: normalize_line_endings(@template)
+  defp valid_body, do: normalize_line_endings(@valid_body)
+
+  defp normalize_line_endings(content) when is_binary(content) do
+    String.replace(content, "\r\n", "\n")
   end
 end

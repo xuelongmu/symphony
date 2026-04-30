@@ -53,24 +53,25 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.mkdir_p!(workspace_root)
       File.mkdir_p!(outside_workspace)
-      File.ln_s!(outside_workspace, symlink_workspace)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
-        workspace_root: workspace_root
-      )
+      if create_symlink_or_skip?(outside_workspace, symlink_workspace) do
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root
+        )
 
-      issue = %Issue{
-        id: "issue-workspace-symlink-guard",
-        identifier: "MT-1000",
-        title: "Validate symlink workspace guard",
-        description: "Ensure app-server refuses symlink escape cwd targets",
-        state: "In Progress",
-        url: "https://example.org/issues/MT-1000",
-        labels: ["backend"]
-      }
+        issue = %Issue{
+          id: "issue-workspace-symlink-guard",
+          identifier: "MT-1000",
+          title: "Validate symlink workspace guard",
+          description: "Ensure app-server refuses symlink escape cwd targets",
+          state: "In Progress",
+          url: "https://example.org/issues/MT-1000",
+          labels: ["backend"]
+        }
 
-      assert {:error, {:invalid_workspace_cwd, :symlink_escape, ^symlink_workspace, _root}} =
-               AppServer.run(symlink_workspace, "guard", issue)
+        assert {:error, {:invalid_workspace_cwd, :symlink_escape, ^symlink_workspace, _root}} =
+                 AppServer.run(symlink_workspace, "guard", issue)
+      end
     after
       File.rm_rf(test_root)
     end
@@ -1301,7 +1302,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.mkdir_p!(test_root)
       System.put_env("SYMP_TEST_SSH_TRACE", trace_file)
-      System.put_env("PATH", test_root <> ":" <> (previous_path || ""))
+      System.put_env("PATH", path_join([test_root, previous_path || ""]))
 
       File.write!(fake_ssh, """
       #!/bin/sh
@@ -1335,6 +1336,7 @@ defmodule SymphonyElixir.AppServerTest do
       """)
 
       File.chmod!(fake_ssh, 0o755)
+      maybe_write_windows_wrapper!(fake_ssh)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: "/remote/workspaces",
@@ -1408,6 +1410,37 @@ defmodule SymphonyElixir.AppServerTest do
              end)
     after
       File.rm_rf(test_root)
+    end
+  end
+
+  defp maybe_write_windows_wrapper!(script_path) do
+    if windows?() do
+      File.write!(script_path <> ".bat", """
+      @echo off
+      sh "%~dp0#{Path.basename(script_path)}" %*
+      exit /b %ERRORLEVEL%
+      """)
+    end
+  end
+
+  defp path_join(paths), do: Enum.join(paths, <<path_separator()::utf8>>)
+
+  defp path_separator do
+    if windows?(), do: ?;, else: ?:
+  end
+
+  defp windows?, do: match?({:win32, _}, :os.type())
+
+  defp create_symlink_or_skip?(target, link) do
+    case File.ln_s(target, link) do
+      :ok ->
+        true
+
+      {:error, reason} when reason in [:eperm, :eacces] ->
+        false
+
+      {:error, reason} ->
+        flunk("failed to create symlink #{inspect(link)} -> #{inspect(target)}: #{inspect(reason)}")
     end
   end
 end

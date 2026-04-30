@@ -179,8 +179,27 @@ defmodule SymphonyElixir.SSHTest do
     )
 
     File.chmod!(fake_ssh, 0o755)
-    System.put_env("PATH", fake_bin_dir <> ":" <> (System.get_env("PATH") || ""))
+    maybe_write_windows_wrapper!(fake_ssh)
+    System.put_env("PATH", path_join([fake_bin_dir, System.get_env("PATH") || ""]))
   end
+
+  defp maybe_write_windows_wrapper!(script_path) do
+    if windows?() do
+      File.write!(script_path <> ".bat", """
+      @echo off
+      sh "%~dp0#{Path.basename(script_path)}" %*
+      exit /b %ERRORLEVEL%
+      """)
+    end
+  end
+
+  defp path_join(paths), do: Enum.join(paths, <<path_separator()::utf8>>)
+
+  defp path_separator do
+    if windows?(), do: ?;, else: ?:
+  end
+
+  defp windows?, do: match?({:win32, _}, :os.type())
 
   defp wait_for_trace!(trace_file, attempts \\ 20)
   defp wait_for_trace!(trace_file, 0), do: flunk("timed out waiting for fake ssh trace at #{trace_file}")

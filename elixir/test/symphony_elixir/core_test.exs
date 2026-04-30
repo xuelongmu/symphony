@@ -1290,7 +1290,7 @@ defmodule SymphonyElixir.CoreTest do
 
       File.mkdir_p!(test_root)
       System.put_env("SYMP_TEST_SSH_TRACE", trace_file)
-      System.put_env("PATH", test_root <> ":" <> (previous_path || ""))
+      System.put_env("PATH", path_join([test_root, previous_path || ""]))
 
       File.write!(fake_ssh, """
       #!/bin/sh
@@ -1298,11 +1298,11 @@ defmodule SymphonyElixir.CoreTest do
       printf 'ARGV:%s\\n' "$*" >> "$trace_file"
 
       case "$*" in
-        *worker-a*"__SYMPHONY_WORKSPACE__"*)
+        *worker-a*__SYMPHONY_WORKSPACE__*)
           printf '%s\\n' 'worker-a prepare failed' >&2
           exit 75
           ;;
-        *worker-b*"__SYMPHONY_WORKSPACE__"*)
+        *worker-b*__SYMPHONY_WORKSPACE__*)
           printf '%s\\t%s\\t%s\\n' '__SYMPHONY_WORKSPACE__' '1' '/remote/home/.symphony-remote-workspaces/MT-SSH-FAILOVER'
           exit 0
           ;;
@@ -1313,6 +1313,7 @@ defmodule SymphonyElixir.CoreTest do
       """)
 
       File.chmod!(fake_ssh, 0o755)
+      maybe_write_windows_wrapper!(fake_ssh)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: "~/.symphony-remote-workspaces",
@@ -1469,6 +1470,24 @@ defmodule SymphonyElixir.CoreTest do
       File.rm_rf(test_root)
     end
   end
+
+  defp maybe_write_windows_wrapper!(script_path) do
+    if windows?() do
+      File.write!(script_path <> ".bat", """
+      @echo off
+      sh "%~dp0#{Path.basename(script_path)}" %*
+      exit /b %ERRORLEVEL%
+      """)
+    end
+  end
+
+  defp path_join(paths), do: Enum.join(paths, <<path_separator()::utf8>>)
+
+  defp path_separator do
+    if windows?(), do: ?;, else: ?:
+  end
+
+  defp windows?, do: match?({:win32, _}, :os.type())
 
   test "agent runner stops continuing once agent.max_turns is reached" do
     test_root =

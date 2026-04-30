@@ -295,7 +295,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert :ok = Workspace.remove_issue_workspaces(nil)
   end
 
-  test "linear issue helpers" do
+  test "tracker issue helpers" do
     issue = %Issue{
       id: "abc",
       labels: ["frontend", "infra"],

@@ -129,7 +129,7 @@ Symphony is easiest to port when kept in these layers:
 4. `Execution Layer` (workspace + agent subprocess)
    - Filesystem lifecycle, workspace preparation, coding-agent protocol.
 
-5. `Integration Layer` (Linear adapter)
+5. `Integration Layer` (tracker adapters)
    - API calls and normalization for tracker data.
 
 6. `Observability Layer` (logs + OPTIONAL status surface)
@@ -137,7 +137,7 @@ Symphony is easiest to port when kept in these layers:
 
 ### 3.3 External Dependencies
 
-- Issue tracker API (Linear for `tracker.kind: linear` in this specification version).
+- Issue tracker API (Linear for `tracker.kind: linear`; GitHub for `tracker.kind: github`).
 - Local filesystem for workspaces and logs.
 - OPTIONAL workspace population tooling (for example Git CLI, if used).
 - Coding-agent executable that supports the targeted Codex app-server mode.
@@ -173,6 +173,8 @@ Fields:
     - `id` (string or null)
     - `identifier` (string or null)
     - `state` (string or null)
+    - `source` (string or null, OPTIONAL)
+    - `url` (string or null, OPTIONAL)
 - `created_at` (timestamp or null)
 - `updated_at` (timestamp or null)
 
@@ -332,6 +334,7 @@ Top-level keys:
 - `workspace`
 - `hooks`
 - `agent`
+- `review`
 - `codex`
 
 Unknown keys SHOULD be ignored for forward compatibility.
@@ -349,7 +352,7 @@ Fields:
 
 - `kind` (string)
   - REQUIRED for dispatch.
-  - Current supported value: `linear`
+  - Current supported values: `linear`, `github`
 - `endpoint` (string)
   - Default for `tracker.kind == "linear"`: `https://api.linear.app/graphql`
 - `api_key` (string)
@@ -358,6 +361,13 @@ Fields:
   - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
 - `project_slug` (string)
   - REQUIRED for dispatch when `tracker.kind == "linear"`.
+- `github` (object)
+  - REQUIRED for dispatch when `tracker.kind == "github"`.
+  - Fields:
+    - `owner` (string)
+    - `repo` (string)
+    - `project_number` (positive integer)
+    - `status_field` (string, default `Status`)
 - `active_states` (list of strings)
   - Default: `Todo`, `In Progress`
 - `terminal_states` (list of strings)
@@ -424,7 +434,20 @@ Fields:
   - State keys are normalized (`lowercase`) for lookup.
   - Invalid entries (non-positive or non-numeric) are ignored.
 
-#### 5.3.6 `codex` (object)
+#### 5.3.6 `review` (object)
+
+Fields:
+
+- `enabled` (boolean)
+  - Default: `false`
+- `state` (string)
+  - Default: `Agent Review`
+  - When enabled, issues in this state are dispatched with review-agent prompt context.
+- `max_rounds` (positive integer)
+  - Default: `3`
+  - Workflow prompt uses this as the automated review loop cap.
+
+#### 5.3.7 `codex` (object)
 
 Fields:
 
@@ -468,6 +491,8 @@ Template input variables:
 
 - `issue` (object)
   - Includes all normalized issue fields, including labels and blockers.
+- `agent` (object)
+  - Includes `role`, currently `implementation` or `review`.
 - `attempt` (integer or null)
   - `null`/absent on first attempt.
   - Integer on retry or continuation run.
@@ -475,7 +500,7 @@ Template input variables:
 Fallback prompt behavior:
 
 - If the workflow prompt body is empty, the runtime MAY use a minimal default prompt
-  (`You are working on an issue from Linear.`).
+  (`You are working on a tracker issue.`).
 - Workflow file read/parse failures are configuration/validation errors and SHOULD NOT silently fall
   back to a prompt.
 
@@ -562,6 +587,7 @@ Validation checks:
 - `tracker.kind` is present and supported.
 - `tracker.api_key` is present after `$` resolution.
 - `tracker.project_slug` is present when REQUIRED by the selected tracker kind.
+- `tracker.github.owner`, `tracker.github.repo`, and `tracker.github.project_number` are present when REQUIRED by the selected tracker kind.
 - `codex.command` is present and non-empty.
 
 ### 6.4 Core Config Fields Summary (Cheat Sheet)
@@ -570,10 +596,14 @@ This section is intentionally redundant so a coding agent can implement the conf
 Extension fields are documented in the extension section that defines them. Core conformance does
 not require recognizing or validating extension fields unless that extension is implemented.
 
-- `tracker.kind`: string, REQUIRED, currently `linear`
+- `tracker.kind`: string, REQUIRED, currently `linear` or `github`
 - `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`
-- `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`
+- `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`; `GITHUB_TOKEN`/`GH_TOKEN` when `tracker.kind=github`
 - `tracker.project_slug`: string, REQUIRED when `tracker.kind=linear`
+- `tracker.github.owner`: string, REQUIRED when `tracker.kind=github`
+- `tracker.github.repo`: string, REQUIRED when `tracker.kind=github`
+- `tracker.github.project_number`: positive integer, REQUIRED when `tracker.kind=github`
+- `tracker.github.status_field`: string, default `Status`
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `polling.interval_ms`: integer, default `30000`
@@ -587,6 +617,9 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.max_turns`: integer, default `20`
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
+- `review.enabled`: boolean, default `false`
+- `review.state`: string, default `Agent Review`
+- `review.max_rounds`: positive integer, default `3`
 - `codex.command`: shell command string, default `codex app-server`
 - `codex.approval_policy`: Codex `AskForApproval` value, default implementation-defined
 - `codex.thread_sandbox`: Codex `SandboxMode` value, default implementation-defined
@@ -724,8 +757,8 @@ An issue is dispatch-eligible only if all are true:
 - It is not already in `claimed`.
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
-- Blocker rule for `Todo` state passes:
-  - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
+- Blocker rule passes:
+  - Do not dispatch any active candidate when any blocker is non-terminal.
 
 Sorting order (stable intent):
 
@@ -1130,7 +1163,7 @@ Note:
 
 - Workspaces are intentionally preserved after successful runs.
 
-## 11. Issue Tracker Integration Contract (Linear-Compatible)
+## 11. Issue Tracker Integration Contract
 
 ### 11.1 REQUIRED Operations
 
@@ -1167,18 +1200,31 @@ Important:
 A non-Linear implementation MAY change transport details, but the normalized outputs MUST match the
 domain model in Section 4.
 
-### 11.3 Normalization Rules
+### 11.3 Query Semantics (GitHub)
+
+GitHub-specific requirements for `tracker.kind == "github"`:
+
+- Use GitHub Projects v2 as the workflow-state source.
+- `tracker.github.owner`, `tracker.github.repo`, and `tracker.github.project_number` identify the project-backed queue.
+- `tracker.github.status_field` identifies the single-select field used as normalized issue `state`.
+- Candidate reads include project items whose content is a GitHub Issue in the configured repository.
+- `blocked_by` is derived from GitHub issue dependency relationships (`blockedBy`/blocking relationship data).
+- Closed GitHub blockers SHOULD normalize to `Closed`; open blockers SHOULD normalize to a non-terminal state such as `Open` when project status is unavailable.
+- Use direct GitHub API calls for issue relationships until native `gh issue` dependency commands exist.
+
+### 11.4 Normalization Rules
 
 Candidate issue normalization SHOULD produce fields listed in Section 4.1.1.
 
 Additional normalization details:
 
 - `labels` -> lowercase strings
-- `blocked_by` -> derived from inverse relations where relation type is `blocks`
+- Linear `blocked_by` -> derived from inverse relations where relation type is `blocks`
+- GitHub `blocked_by` -> derived from issue dependency relationships
 - `priority` -> integer only (non-integers become null)
 - `created_at` and `updated_at` -> parse ISO-8601 timestamps
 
-### 11.4 Error Handling Contract
+### 11.5 Error Handling Contract
 
 RECOMMENDED error categories:
 
@@ -1197,7 +1243,7 @@ Orchestrator behavior on tracker errors:
 - Running-state refresh failure: log and keep active workers running.
 - Startup terminal cleanup failure: log warning and continue startup.
 
-### 11.5 Tracker Writes (Important Boundary)
+### 11.6 Tracker Writes (Important Boundary)
 
 Symphony does not require first-class tracker write APIs in the orchestrator.
 
@@ -1217,6 +1263,8 @@ Inputs to prompt rendering:
 
 - `workflow.prompt_template`
 - normalized `issue` object
+- normalized `agent` object
+  - `role`: `implementation` or `review`
 - OPTIONAL `attempt` integer (retry/continuation metadata)
 
 ### 12.2 Rendering Rules
@@ -1224,6 +1272,7 @@ Inputs to prompt rendering:
 - Render with strict variable checking.
 - Render with strict filter checking.
 - Convert issue object keys to strings for template compatibility.
+- Convert agent object keys to strings for template compatibility.
 - Preserve nested arrays/maps (labels, blockers) so templates can iterate.
 
 ### 12.3 Retry/Continuation Semantics
@@ -1940,13 +1989,13 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Invalid YAML front matter returns typed error
 - Front matter non-map returns typed error
 - Config defaults apply when OPTIONAL values are missing
-- `tracker.kind` validation enforces currently supported kind (`linear`)
+- `tracker.kind` validation enforces currently supported kinds (`linear`, `github`)
 - `tracker.api_key` works (including `$VAR` indirection)
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
 - `codex.command` is preserved as a shell command string
 - Per-state concurrency override map normalizes state names and ignores invalid values
-- Prompt template renders `issue` and `attempt`
+- Prompt template renders `issue`, `agent`, and `attempt`
 - Prompt rendering fails on unknown variables (strict mode)
 
 ### 17.2 Workspace Manager and Safety
@@ -1979,8 +2028,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
 - Dispatch sort order is priority then oldest creation time
-- `Todo` issue with non-terminal blockers is not eligible
-- `Todo` issue with terminal blockers is eligible
+- Active candidate issue with non-terminal blockers is not eligible
+- Active candidate issue with terminal blockers is eligible
+- Active running issue that becomes blocked stops without workspace cleanup
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace

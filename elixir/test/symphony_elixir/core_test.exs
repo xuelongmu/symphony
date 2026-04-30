@@ -17,6 +17,9 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     assert config.tracker.assignee == nil
     assert config.agent.max_turns == 20
+    assert config.review.enabled == false
+    assert config.review.state == "Agent Review"
+    assert config.review.max_rounds == 3
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
 
@@ -86,6 +89,43 @@ defmodule SymphonyElixir.CoreTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "123")
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: nil,
+      tracker_project_slug: nil
+    )
+
+    assert {:error, :missing_github_api_token} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: "github-token",
+      tracker_project_slug: nil
+    )
+
+    assert {:error, :missing_github_tracker_config} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: "github-token",
+      tracker_project_slug: nil,
+      tracker_github_owner: "openai",
+      tracker_github_repo: "symphony",
+      tracker_github_project_number: 7,
+      review_enabled: true,
+      review_state: "Agent Review",
+      review_max_rounds: 4
+    )
+
+    assert :ok = Config.validate!()
+    config = Config.settings!()
+    assert config.tracker.github.owner == "openai"
+    assert config.tracker.github.repo == "symphony"
+    assert config.tracker.github.project_number == 7
+    assert config.tracker.github.status_field == "Status"
+    assert config.review.enabled
+    assert config.review.max_rounds == 4
   end
 
   test "current WORKFLOW.md file is valid and complete" do
@@ -113,6 +153,40 @@ defmodule SymphonyElixir.CoreTest do
     assert String.trim(prompt) != ""
     assert is_binary(Config.workflow_prompt())
     assert Config.workflow_prompt() == prompt
+  end
+
+  test "orchestrator selects review role from configured review state" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      review_enabled: true,
+      review_state: "Agent Review",
+      tracker_active_states: ["Todo", "In Progress", "Agent Review"]
+    )
+
+    assert Orchestrator.agent_role_for_issue_for_test(%Issue{
+             id: "issue-review",
+             identifier: "MT-REV",
+             title: "Review",
+             state: "Agent Review"
+           }) == :review
+
+    assert Orchestrator.agent_role_for_issue_for_test(%Issue{
+             id: "issue-impl",
+             identifier: "MT-IMPL",
+             title: "Implementation",
+             state: "In Progress"
+           }) == :implementation
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      review_enabled: false,
+      tracker_active_states: ["Todo", "In Progress", "Agent Review"]
+    )
+
+    assert Orchestrator.agent_role_for_issue_for_test(%Issue{
+             id: "issue-disabled",
+             identifier: "MT-DISABLED",
+             title: "Disabled",
+             state: "Agent Review"
+           }) == :implementation
   end
 
   test "linear api token resolves from LINEAR_API_KEY env var" do
@@ -345,6 +419,70 @@ defmodule SymphonyElixir.CoreTest do
       refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
       refute File.exists?(workspace)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "blocked running issue stops active agent without cleaning workspace" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-blocked-reconcile-#{System.unique_integer([:positive])}"
+      )
+
+    issue_id = "issue-blocked"
+    issue_identifier = "MT-556B"
+    workspace = Path.join(test_root, issue_identifier)
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: test_root,
+        tracker_active_states: ["Todo", "In Progress", "In Review"],
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"]
+      )
+
+      File.mkdir_p!(test_root)
+      File.mkdir_p!(workspace)
+
+      agent_pid =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      state = %Orchestrator.State{
+        running: %{
+          issue_id => %{
+            pid: agent_pid,
+            ref: nil,
+            identifier: issue_identifier,
+            issue: %Issue{id: issue_id, state: "In Progress", identifier: issue_identifier},
+            started_at: DateTime.utc_now()
+          }
+        },
+        claimed: MapSet.new([issue_id]),
+        codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+        retry_attempts: %{}
+      }
+
+      issue = %Issue{
+        id: issue_id,
+        identifier: issue_identifier,
+        state: "In Progress",
+        title: "Blocked now",
+        description: "Dependency appeared",
+        blocked_by: [%{id: "blocker-1", identifier: "MT-556A", state: "In Progress"}],
+        labels: []
+      }
+
+      updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+      refute Map.has_key?(updated_state.running, issue_id)
+      refute MapSet.member?(updated_state.claimed, issue_id)
+      refute Process.alive?(agent_pid)
+      assert File.exists?(workspace)
     after
       File.rm_rf(test_root)
     end
@@ -766,7 +904,7 @@ defmodule SymphonyElixir.CoreTest do
 
   test "prompt builder renders issue and attempt values from workflow template" do
     workflow_prompt =
-      "Ticket {{ issue.identifier }} {{ issue.title }} labels={{ issue.labels }} attempt={{ attempt }}"
+      "Ticket {{ issue.identifier }} {{ issue.title }} labels={{ issue.labels }} attempt={{ attempt }} role={{ agent.role }}"
 
     write_workflow_file!(Workflow.workflow_file_path(), prompt: workflow_prompt)
 
@@ -779,11 +917,12 @@ defmodule SymphonyElixir.CoreTest do
       labels: ["backend"]
     }
 
-    prompt = PromptBuilder.build_prompt(issue, attempt: 3)
+    prompt = PromptBuilder.build_prompt(issue, attempt: 3, agent_role: :review)
 
     assert prompt =~ "Ticket S-1 Refactor backend request path"
     assert prompt =~ "labels=backend"
     assert prompt =~ "attempt=3"
+    assert prompt =~ "role=review"
   end
 
   test "prompt builder renders issue datetime fields without crashing" do
@@ -883,13 +1022,14 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue)
 
-    assert prompt =~ "You are working on a Linear issue."
+    assert prompt =~ "You are working on a tracker issue."
     assert prompt =~ "Identifier: MT-777"
     assert prompt =~ "Title: Make fallback prompt useful"
     assert prompt =~ "Body:"
     assert prompt =~ "Include enough issue context to start working."
     assert Config.workflow_prompt() =~ "{{ issue.identifier }}"
     assert Config.workflow_prompt() =~ "{{ issue.title }}"
+    assert Config.workflow_prompt() =~ "{{ agent.role }}"
     assert Config.workflow_prompt() =~ "{{ issue.description }}"
   end
 
@@ -959,11 +1099,12 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue, attempt: 2)
 
-    assert prompt =~ "You are working on a Linear ticket `MT-616`"
+    assert prompt =~ "You are working on a tracker ticket `MT-616`"
     assert prompt =~ "Issue context:"
     assert prompt =~ "Identifier: MT-616"
     assert prompt =~ "Title: Use rich templates for WORKFLOW.md"
     assert prompt =~ "Current status: In Progress"
+    assert prompt =~ "Agent role: implementation"
     assert prompt =~ "https://example.org/issues/MT-616/use-rich-templates-for-workflowmd"
     assert prompt =~ "This is an unattended orchestration session."
     assert prompt =~ "Only stop early for a true blocker"

@@ -7,10 +7,11 @@ defmodule SymphonyElixir.Config do
   alias SymphonyElixir.Workflow
 
   @default_prompt_template """
-  You are working on a Linear issue.
+  You are working on a tracker issue.
 
   Identifier: {{ issue.identifier }}
   Title: {{ issue.title }}
+  Agent role: {{ agent.role }}
 
   Body:
   {% if issue.description %}
@@ -115,22 +116,39 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_semantics(settings) do
-    cond do
-      is_nil(settings.tracker.kind) ->
-        {:error, :missing_tracker_kind}
-
-      settings.tracker.kind not in ["linear", "memory"] ->
-        {:error, {:unsupported_tracker_kind, settings.tracker.kind}}
-
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.api_key) ->
-        {:error, :missing_linear_api_token}
-
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.project_slug) ->
-        {:error, :missing_linear_project_slug}
-
-      true ->
-        :ok
+    with :ok <- validate_tracker_kind(settings.tracker.kind) do
+      validate_tracker_config(settings.tracker)
     end
+  end
+
+  defp validate_tracker_kind(nil), do: {:error, :missing_tracker_kind}
+  defp validate_tracker_kind(kind) when kind in ["linear", "memory", "github"], do: :ok
+  defp validate_tracker_kind(kind), do: {:error, {:unsupported_tracker_kind, kind}}
+
+  defp validate_tracker_config(%{kind: "linear"} = tracker) do
+    cond do
+      not is_binary(tracker.api_key) -> {:error, :missing_linear_api_token}
+      not is_binary(tracker.project_slug) -> {:error, :missing_linear_project_slug}
+      true -> :ok
+    end
+  end
+
+  defp validate_tracker_config(%{kind: "github"} = tracker) do
+    cond do
+      not is_binary(tracker.api_key) -> {:error, :missing_github_api_token}
+      missing_github_tracker_config?(tracker.github) -> {:error, :missing_github_tracker_config}
+      true -> :ok
+    end
+  end
+
+  defp validate_tracker_config(_tracker), do: :ok
+
+  defp missing_github_tracker_config?(nil), do: true
+
+  defp missing_github_tracker_config?(github) do
+    not is_binary(github.owner) or String.trim(github.owner) == "" or
+      not is_binary(github.repo) or String.trim(github.repo) == "" or
+      not is_integer(github.project_number)
   end
 
   defp format_config_error(reason) do

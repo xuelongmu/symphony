@@ -48,6 +48,9 @@ mix specs.check
 
 ## PR Requirements
 
+- Do not name branches with the `codex/` prefix.
+- Do not create or target PRs in `openai/symphony`; keep PRs on the user's own
+  repository/fork/local remote unless explicitly instructed otherwise.
 - PR body must follow `../.github/pull_request_template.md` exactly.
 - Validate PR body locally when needed:
 

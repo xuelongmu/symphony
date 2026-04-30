@@ -48,6 +48,7 @@ mix specs.check
 
 ## PR Requirements
 
+- PR titles must describe the change directly; do not prefix them with `[codex]`.
 - PR body must follow `../.github/pull_request_template.md` exactly.
 - Validate PR body locally when needed:
 

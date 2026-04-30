@@ -400,6 +400,10 @@ defmodule SymphonyElixir.GitHub.Client do
     patch_issue_state(issue_id, state_name, request_fun)
   end
 
+  @doc false
+  @spec github_rest_url_for_test(String.t()) :: String.t()
+  def github_rest_url_for_test(path) when is_binary(path), do: github_rest_url(path)
+
   defp fetch_project_issues(graphql_fun) when is_function(graphql_fun, 2) do
     with {:ok, _project_id, items} <- fetch_project_items(graphql_fun) do
       tracker = Config.settings!().tracker
@@ -646,9 +650,33 @@ defmodule SymphonyElixir.GitHub.Client do
   defp github_rest_url(path) when is_binary(path) do
     endpoint =
       Config.settings!().tracker.endpoint
-      |> String.trim_trailing("/")
+      |> rest_endpoint()
 
     endpoint <> path
+  end
+
+  defp rest_endpoint(endpoint) when is_binary(endpoint) do
+    endpoint
+    |> String.trim_trailing("/")
+    |> String.replace_suffix("/graphql", "")
+    |> String.trim_trailing("/")
+  end
+
+  defp issue_identifier(number, tracker) do
+    case issue_number_id(number) do
+      nil ->
+        nil
+
+      issue_id ->
+        [
+          "github",
+          identifier_segment(tracker.owner),
+          identifier_segment(tracker.repo),
+          identifier_segment(issue_id)
+        ]
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.join("-")
+    end
   end
 
   defp validate_tracker_settings(tracker) do
@@ -825,13 +853,6 @@ defmodule SymphonyElixir.GitHub.Client do
   defp issue_number_id(number) when is_binary(number), do: number
   defp issue_number_id(_number), do: nil
 
-  defp issue_identifier(number, tracker) do
-    case issue_number_id(number) do
-      nil -> nil
-      issue_id -> "#{tracker.owner}/#{tracker.repo}##{issue_id}"
-    end
-  end
-
   defp parse_issue_number(issue_id) when is_binary(issue_id) do
     normalized_issue_id =
       issue_id
@@ -987,6 +1008,13 @@ defmodule SymphonyElixir.GitHub.Client do
 
   defp path_segment(value) when is_binary(value) do
     URI.encode(value, &URI.char_unreserved?/1)
+  end
+
+  defp identifier_segment(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.replace(~r/[^A-Za-z0-9._~-]+/, "-")
+    |> String.trim("-")
   end
 
   defp response_status(response) when is_map(response) do

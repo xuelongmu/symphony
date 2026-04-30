@@ -159,6 +159,8 @@ Notes:
 - GitHub Issues only has `open` and `closed`; the configured Projects v2 `project_status_field`
   value is the workflow state that Symphony compares against `active_states` and
   `terminal_states`.
+- GitHub issue identifiers are emitted as route-safe single path segments such as
+  `github-your-org-your-repo-123`; `issue.id` remains the raw GitHub issue number for API updates.
 - `project_status_field` should name a Projects v2 single-select field, usually `Status`.
   Use `project_owner_type: user` for user-owned projects and `organization` for org-owned
   projects.

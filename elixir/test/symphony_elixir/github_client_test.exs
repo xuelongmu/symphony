@@ -81,7 +81,8 @@ defmodule SymphonyElixir.GitHubClientTest do
     assert {:ok, issues} = GitHubClient.fetch_candidate_issues_for_test(graphql_fun)
 
     assert Enum.map(issues, & &1.id) == ["1", "4"]
-    assert Enum.map(issues, & &1.identifier) == ["xuelongmu/symphony#1", "xuelongmu/symphony#4"]
+    assert Enum.map(issues, & &1.identifier) == ["github-xuelongmu-symphony-1", "github-xuelongmu-symphony-4"]
+    refute Enum.any?(issues, &String.contains?(&1.identifier, ["/", "#", "?"]))
     assert Enum.map(issues, & &1.state) == ["Todo", "In Progress"]
 
     first_issue = hd(issues)
@@ -277,6 +278,25 @@ defmodule SymphonyElixir.GitHubClientTest do
              GitHubClient.patch_issue_state_for_test("12", "Done", request_fun)
 
     assert body =~ "Validation Failed"
+  end
+
+  test "REST URLs are built from GraphQL-suffixed endpoints by stripping the GraphQL path" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_endpoint: "https://api.github.test/graphql/",
+      tracker_api_token: "github-token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_owner_type: "user",
+      tracker_project_number: 1,
+      tracker_project_status_field: "Status",
+      tracker_active_states: ["Todo", "In Progress"],
+      tracker_terminal_states: ["Closed", "Done"]
+    )
+
+    assert GitHubClient.github_rest_url_for_test("/repos/xuelongmu/symphony/issues/12") ==
+             "https://api.github.test/repos/xuelongmu/symphony/issues/12"
   end
 
   defp project_items_response(items, opts) do

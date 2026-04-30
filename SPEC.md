@@ -1245,9 +1245,10 @@ Important:
 
 - GitHub Issues only exposes `open` and `closed`. For GitHub tracker workflows, the Projects v2
   Status field, or the configured `project_status_field`, is the authoritative workflow state.
-- The normalized issue `identifier` SHOULD be the issue number prefixed with `#` or another stable
-  implementation-documented human-readable GitHub issue identifier. The normalized `url` SHOULD be
-  the issue's HTML URL.
+- The normalized issue `identifier` SHOULD be a stable, human-readable, route-safe single path
+  segment, such as `github-<owner>-<repo>-<number>`. It MUST NOT include `/`, `#`, or query/fragment
+  delimiters because observability API routes embed the identifier as one path segment. The
+  normalized `url` SHOULD be the issue's HTML URL.
 - Token permissions must cover both issue access and project access. Fine-grained tokens need
   repository Issues read/write plus project read/write access for the project owner. Classic
   personal access tokens need `read:project` for Projects v2 GraphQL queries and `project` for

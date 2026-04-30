@@ -519,8 +519,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
           end
         )
 
-      assert_received {:github_client_called, lookup_query,
-                       %{"owner" => "xuelongmu", "repo" => "symphony", "number" => 3}, []}
+      assert_received {:github_client_called, lookup_query, %{"owner" => "xuelongmu", "repo" => "symphony", "number" => 3}, []}
 
       assert lookup_query =~ "issue(number: $number)"
 

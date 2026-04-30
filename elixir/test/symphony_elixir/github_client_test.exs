@@ -249,21 +249,18 @@ defmodule SymphonyElixir.GitHubClientTest do
 
     assert :ok = GitHubClient.create_comment_for_test("#12", "hello", request_fun)
 
-    assert_receive {:github_request, :post, "/repos/xuelongmu/symphony/issues/12/comments", headers,
-                    %{"body" => "hello"}, []}
+    assert_receive {:github_request, :post, "/repos/xuelongmu/symphony/issues/12/comments", headers, %{"body" => "hello"}, []}
 
     assert {"Authorization", "Bearer github-token"} in headers
     assert {"X-GitHub-Api-Version", "2026-03-10"} in headers
 
     assert :ok = GitHubClient.patch_issue_state_for_test("12", "Done", request_fun)
 
-    assert_receive {:github_request, :patch, "/repos/xuelongmu/symphony/issues/12", _headers,
-                    %{"state" => "closed", "state_reason" => "completed"}, []}
+    assert_receive {:github_request, :patch, "/repos/xuelongmu/symphony/issues/12", _headers, %{"state" => "closed", "state_reason" => "completed"}, []}
 
     assert :ok = GitHubClient.patch_issue_state_for_test("12", "Todo", request_fun)
 
-    assert_receive {:github_request, :patch, "/repos/xuelongmu/symphony/issues/12", _headers,
-                    %{"state" => "open", "state_reason" => "reopened"}, []}
+    assert_receive {:github_request, :patch, "/repos/xuelongmu/symphony/issues/12", _headers, %{"state" => "open", "state_reason" => "reopened"}, []}
   end
 
   test "REST request failures include GitHub-specific status tuples" do

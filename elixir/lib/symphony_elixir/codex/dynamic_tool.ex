@@ -416,9 +416,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             {:ok, :linear}
 
           has_issue_number? and has_issue_id? ->
-            {:error,
-             {:sync_workpad,
-              "cannot infer tracker when both `issue_number` and `issue_id` are provided; set `tracker` to `github` or `linear`."}}
+            {:error, {:sync_workpad, "cannot infer tracker when both `issue_number` and `issue_id` are provided; set `tracker` to `github` or `linear`."}}
 
           true ->
             {:error, {:sync_workpad, "`issue_number` is required for GitHub sync or `issue_id` is required for Linear sync."}}

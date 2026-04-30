@@ -23,24 +23,28 @@ defmodule SymphonyElixir.PathSafety do
   defp resolve_segments(root, resolved_segments, []), do: {:ok, join_path(root, resolved_segments)}
 
   defp resolve_segments(root, resolved_segments, [segment | rest]) do
-    candidate_path = join_path(root, resolved_segments ++ [segment])
+    if byte_size(segment) > 255 do
+      {:error, :enametoolong}
+    else
+      candidate_path = join_path(root, resolved_segments ++ [segment])
 
-    case File.lstat(candidate_path) do
-      {:ok, %File.Stat{type: :symlink}} ->
-        with {:ok, target} <- :file.read_link_all(String.to_charlist(candidate_path)) do
-          resolved_target = Path.expand(IO.chardata_to_string(target), join_path(root, resolved_segments))
-          {target_root, target_segments} = split_absolute_path(resolved_target)
-          resolve_segments(target_root, [], target_segments ++ rest)
-        end
+      case File.lstat(candidate_path) do
+        {:ok, %File.Stat{type: :symlink}} ->
+          with {:ok, target} <- :file.read_link_all(String.to_charlist(candidate_path)) do
+            resolved_target = Path.expand(IO.chardata_to_string(target), join_path(root, resolved_segments))
+            {target_root, target_segments} = split_absolute_path(resolved_target)
+            resolve_segments(target_root, [], target_segments ++ rest)
+          end
 
-      {:ok, _stat} ->
-        resolve_segments(root, resolved_segments ++ [segment], rest)
+        {:ok, _stat} ->
+          resolve_segments(root, resolved_segments ++ [segment], rest)
 
-      {:error, :enoent} ->
-        {:ok, join_path(root, resolved_segments ++ [segment | rest])}
+        {:error, :enoent} ->
+          {:ok, join_path(root, resolved_segments ++ [segment | rest])}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 

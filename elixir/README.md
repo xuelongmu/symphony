@@ -13,32 +13,39 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 
 ## How it works
 
-1. Polls Linear for candidate work
+1. Polls the configured tracker for candidate work
 2. Creates a workspace per issue
 3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
    workspace
 4. Sends a workflow prompt to Codex
 5. Keeps Codex working on the issue until the work is done
 
-During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
-skills can make raw Linear GraphQL calls.
+During Linear app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that
+repo skills can make raw Linear GraphQL calls.
 
-If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
-Symphony stops the active agent for that issue and cleans up matching workspaces.
+If a claimed issue moves to a configured terminal state (`Done`, `Closed`, `Cancelled`, or
+`Duplicate` by default), Symphony stops the active agent for that issue and cleans up matching
+workspaces.
 
 ## How to use it
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
-2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
-   set it as the `LINEAR_API_KEY` environment variable.
+2. Configure tracker credentials:
+   - For Linear, get a personal token via Settings → Security & access → Personal API keys, and set
+     it as the `LINEAR_API_KEY` environment variable.
+   - For GitHub, set `GITHUB_TOKEN` to a token that can read/write repository issues and read/write
+     the configured Projects v2 project.
 3. Copy this directory's `WORKFLOW.md` to your repo.
 4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
    - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
      operations such as comment editing or upload flows.
 5. Customize the copied `WORKFLOW.md` file for your project.
    - To get your project's slug, right-click the project and copy its URL. The slug is part of the
-     URL.
+     URL. This applies to `tracker.kind: linear`.
+   - For GitHub, use `tracker.kind: github` and configure the repository plus the Projects v2
+     project owner, project number, and status field. GitHub Issues alone only has `open` and
+     `closed`; Symphony uses the configured Projects v2 Status field as the workflow state source.
    - When creating a workflow based on this repo, note that it depends on non-standard Linear
      issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
      Team Settings → Workflow in Linear.
@@ -83,7 +90,7 @@ Optional flags:
 The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
 Codex session prompt.
 
-Minimal example:
+Minimal Linear example:
 
 ```md
 ---
@@ -107,9 +114,60 @@ You are working on a Linear issue {{ issue.identifier }}.
 Title: {{ issue.title }} Body: {{ issue.description }}
 ```
 
+Minimal GitHub Issues + Projects v2 example:
+
+```md
+---
+tracker:
+  kind: github
+  owner: your-org
+  repo: your-repo
+  project_owner: your-org
+  project_owner_type: organization
+  project_number: 12
+  project_status_field: Status
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Closed
+  api_key: $GITHUB_TOKEN
+workspace:
+  root: ~/code/workspaces
+hooks:
+  after_create: |
+    git clone git@github.com:your-org/your-repo.git .
+agent:
+  max_concurrent_agents: 10
+  max_turns: 20
+codex:
+  command: codex app-server
+---
+
+You are working on GitHub issue {{ issue.identifier }}.
+
+Title: {{ issue.title }} Body: {{ issue.description }}
+```
+
 Notes:
 
 - If a value is missing, defaults are used.
+- For `tracker.kind: github`, configure `owner`, `repo`, `project_owner`,
+  `project_owner_type`, `project_number`, `project_status_field`, `active_states`,
+  `terminal_states`, and an API token through `api_key` or `GITHUB_TOKEN`.
+- GitHub Issues only has `open` and `closed`; the configured Projects v2 `project_status_field`
+  value is the workflow state that Symphony compares against `active_states` and
+  `terminal_states`.
+- GitHub issue identifiers are emitted as route-safe single path segments such as
+  `github-your-org-your-repo-123`; `issue.id` remains the raw GitHub issue number for API updates.
+- `project_status_field` should name a Projects v2 single-select field, usually `Status`.
+  Use `project_owner_type: user` for user-owned projects and `organization` for org-owned
+  projects.
+- GitHub tokens need Issues read/write on the repository and Projects v2 read/write access on the
+  project owner. Classic personal access tokens use `read:project` for Projects v2 GraphQL queries
+  and `project` for Projects v2 GraphQL mutations; fine-grained tokens should grant repository
+  Issues read/write and project read/write access.
 - Safer Codex defaults are used when policy fields are omitted:
   - `codex.approval_policy` defaults to `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}`
   - `codex.thread_sandbox` defaults to `workspace-write`
@@ -127,7 +185,8 @@ Notes:
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
-- `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
+- `tracker.api_key` reads from `LINEAR_API_KEY` for Linear or `GITHUB_TOKEN` for GitHub when unset
+  or when value is the matching `$VAR`.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the

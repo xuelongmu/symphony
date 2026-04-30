@@ -49,6 +49,12 @@ defmodule SymphonyElixir.Config.Schema do
       field(:endpoint, :string, default: "https://api.linear.app/graphql")
       field(:api_key, :string)
       field(:project_slug, :string)
+      field(:owner, :string)
+      field(:repo, :string)
+      field(:project_owner, :string)
+      field(:project_owner_type, :string, default: "user")
+      field(:project_number, :integer)
+      field(:project_status_field, :string, default: "Status")
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
@@ -59,9 +65,24 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states],
+        [
+          :kind,
+          :endpoint,
+          :api_key,
+          :project_slug,
+          :owner,
+          :repo,
+          :project_owner,
+          :project_owner_type,
+          :project_number,
+          :project_status_field,
+          :assignee,
+          :active_states,
+          :terminal_states
+        ],
         empty_values: []
       )
+      |> validate_number(:project_number, greater_than: 0)
     end
   end
 
@@ -90,7 +111,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
     embedded_schema do
-      field(:root, :string, default: Path.join(System.tmp_dir!(), "symphony_workspaces"))
+      field(:root, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -368,7 +389,8 @@ defmodule SymphonyElixir.Config.Schema do
   defp finalize_settings(settings) do
     tracker = %{
       settings.tracker
-      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("LINEAR_API_KEY")),
+      | endpoint: default_tracker_endpoint(settings.tracker.kind, settings.tracker.endpoint),
+        api_key: resolve_secret_setting(settings.tracker.api_key, default_tracker_api_key(settings.tracker.kind)),
         assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
     }
 
@@ -421,6 +443,8 @@ defmodule SymphonyElixir.Config.Schema do
       resolved -> resolved
     end
   end
+
+  defp resolve_path_value(nil, default), do: default
 
   defp resolve_path_value(value, default) when is_binary(value) do
     case normalize_path_token(value) do
@@ -478,6 +502,15 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp normalize_secret_value(_value), do: nil
+
+  defp default_tracker_api_key("github"), do: System.get_env("GITHUB_TOKEN")
+  defp default_tracker_api_key(_kind), do: System.get_env("LINEAR_API_KEY")
+
+  defp default_tracker_endpoint("github", endpoint)
+       when endpoint in [nil, "", "https://api.linear.app/graphql"],
+       do: "https://api.github.com"
+
+  defp default_tracker_endpoint(_kind, endpoint), do: endpoint
 
   defp default_turn_sandbox_policy(workspace) do
     %{

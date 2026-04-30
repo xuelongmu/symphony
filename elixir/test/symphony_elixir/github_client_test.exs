@@ -90,6 +90,7 @@ defmodule SymphonyElixir.GitHubClientTest do
     assert first_issue.labels == ["backend"]
     assert first_issue.assignee_id == "alice"
     assert first_issue.url == "https://github.com/xuelongmu/symphony/issues/1"
+
     assert first_issue.blocked_by == [
              %{
                id: "blocker-node-99",

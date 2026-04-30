@@ -5,7 +5,8 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.{Config, PromptBuilder, Tracker, Workspace}
+  alias SymphonyElixir.Tracker.Issue
 
   @type worker_host :: String.t() | nil
 

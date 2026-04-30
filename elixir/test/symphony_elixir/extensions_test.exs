@@ -61,8 +61,18 @@ defmodule SymphonyElixir.ExtensionsTest do
       :ok
     end
 
-    def update_issue_state(issue_id, state_name) do
-      send(self(), {:github_update_issue_state_called, issue_id, state_name})
+    def resolve_status_update(issue_id, state_name) do
+      send(self(), {:github_resolve_status_update_called, issue_id, state_name})
+      {:ok, %{project_id: "project-1", item_id: "item-1", field_id: "field-status", option_id: "option-review"}}
+    end
+
+    def update_project_item_status(status_update) do
+      send(self(), {:github_update_project_item_status_called, status_update})
+      :ok
+    end
+
+    def patch_issue_state(issue_id, state_name) do
+      send(self(), {:github_patch_issue_state_called, issue_id, state_name})
       :ok
     end
   end
@@ -260,7 +270,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert :ok = SymphonyElixir.Tracker.create_comment("github-issue-1", "review note")
     assert_receive {:github_create_comment_called, "github-issue-1", "review note"}
     assert :ok = SymphonyElixir.Tracker.update_issue_state("github-issue-1", "Human Review")
-    assert_receive {:github_update_issue_state_called, "github-issue-1", "Human Review"}
+    assert_receive {:github_resolve_status_update_called, "github-issue-1", "Human Review"}
+    assert_receive {:github_update_project_item_status_called, _}
+    assert_receive {:github_patch_issue_state_called, "github-issue-1", "Human Review"}
   end
 
   test "linear adapter delegates reads and validates mutation responses" do

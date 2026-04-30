@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Config do
   alias SymphonyElixir.Workflow
 
   @default_prompt_template """
-  You are working on a tracker issue.
+  You are working on an issue from the configured tracker.
 
   Identifier: {{ issue.identifier }}
   Title: {{ issue.title }}
@@ -136,20 +136,17 @@ defmodule SymphonyElixir.Config do
   defp validate_tracker_config(%{kind: "github"} = tracker) do
     cond do
       not is_binary(tracker.api_key) -> {:error, :missing_github_api_token}
-      missing_github_tracker_config?(tracker.github) -> {:error, :missing_github_tracker_config}
+      not is_binary(tracker.owner) -> {:error, :missing_github_owner}
+      not is_binary(tracker.repo) -> {:error, :missing_github_repo}
+      not is_binary(tracker.project_owner) -> {:error, :missing_github_project_owner}
+      tracker.project_owner_type not in ["user", "organization", "org"] -> {:error, {:unsupported_github_project_owner_type, tracker.project_owner_type}}
+      not is_integer(tracker.project_number) -> {:error, :missing_github_project_number}
+      not is_binary(tracker.project_status_field) -> {:error, :missing_github_project_status_field}
       true -> :ok
     end
   end
 
   defp validate_tracker_config(_tracker), do: :ok
-
-  defp missing_github_tracker_config?(nil), do: true
-
-  defp missing_github_tracker_config?(github) do
-    not is_binary(github.owner) or String.trim(github.owner) == "" or
-      not is_binary(github.repo) or String.trim(github.repo) == "" or
-      not is_integer(github.project_number)
-  end
 
   defp format_config_error(reason) do
     case reason do

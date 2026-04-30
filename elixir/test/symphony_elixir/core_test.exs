@@ -104,7 +104,7 @@ defmodule SymphonyElixir.CoreTest do
       tracker_project_slug: nil
     )
 
-    assert {:error, :missing_github_tracker_config} = Config.validate!()
+    assert {:error, :missing_github_owner} = Config.validate!()
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "github",
@@ -124,6 +124,11 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.github.repo == "symphony"
     assert config.tracker.github.project_number == 7
     assert config.tracker.github.status_field == "Status"
+    assert config.tracker.owner == "openai"
+    assert config.tracker.repo == "symphony"
+    assert config.tracker.project_owner == "openai"
+    assert config.tracker.project_number == 7
+    assert config.tracker.project_status_field == "Status"
     assert config.review.enabled
     assert config.review.max_rounds == 4
   end
@@ -205,6 +210,111 @@ defmodule SymphonyElixir.CoreTest do
     assert Config.settings!().tracker.api_key == env_api_key
     assert Config.settings!().tracker.project_slug == "project"
     assert :ok = Config.validate!()
+  end
+
+  test "github tracker settings resolve from GITHUB_TOKEN env var" do
+    previous_github_token = System.get_env("GITHUB_TOKEN")
+    env_api_key = "test-github-api-key"
+
+    on_exit(fn -> restore_env("GITHUB_TOKEN", previous_github_token) end)
+    System.put_env("GITHUB_TOKEN", env_api_key)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_endpoint: nil,
+      tracker_api_token: nil,
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_number: 1,
+      codex_command: "/bin/sh app-server"
+    )
+
+    settings = Config.settings!()
+    assert settings.tracker.api_key == env_api_key
+    assert settings.tracker.endpoint == "https://api.github.com"
+    assert settings.tracker.owner == "xuelongmu"
+    assert settings.tracker.repo == "symphony"
+    assert settings.tracker.project_owner == "xuelongmu"
+    assert settings.tracker.project_owner_type == "user"
+    assert settings.tracker.project_number == 1
+    assert settings.tracker.project_status_field == "Status"
+    assert :ok = Config.validate!()
+    assert SymphonyElixir.Tracker.adapter() == SymphonyElixir.GitHub.Adapter
+  end
+
+  test "github tracker validation requires repo and project settings" do
+    previous_github_token = System.get_env("GITHUB_TOKEN")
+
+    on_exit(fn -> restore_env("GITHUB_TOKEN", previous_github_token) end)
+    System.delete_env("GITHUB_TOKEN")
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: nil,
+      tracker_owner: nil,
+      tracker_repo: nil,
+      tracker_project_owner: nil,
+      tracker_project_number: nil
+    )
+
+    assert {:error, :missing_github_api_token} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: "token",
+      tracker_owner: nil,
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_number: 1
+    )
+
+    assert {:error, :missing_github_owner} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: "token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: nil,
+      tracker_project_owner: "xuelongmu",
+      tracker_project_number: 1
+    )
+
+    assert {:error, :missing_github_repo} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: "token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: nil,
+      tracker_project_number: 1
+    )
+
+    assert {:error, :missing_github_project_owner} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: "token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_owner_type: "team",
+      tracker_project_number: 1
+    )
+
+    assert {:error, {:unsupported_github_project_owner_type, "team"}} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: "token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_number: nil
+    )
+
+    assert {:error, :missing_github_project_number} = Config.validate!()
   end
 
   test "linear assignee resolves from LINEAR_ASSIGNEE env var" do
@@ -1022,7 +1132,7 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue)
 
-    assert prompt =~ "You are working on a tracker issue."
+    assert prompt =~ "You are working on an issue from the configured tracker."
     assert prompt =~ "Identifier: MT-777"
     assert prompt =~ "Title: Make fallback prompt useful"
     assert prompt =~ "Body:"
@@ -1326,7 +1436,7 @@ defmodule SymphonyElixir.CoreTest do
 
       File.mkdir_p!(test_root)
       System.put_env("SYMP_TEST_SSH_TRACE", trace_file)
-      System.put_env("PATH", test_root <> ":" <> (previous_path || ""))
+      System.put_env("PATH", path_join([test_root, previous_path || ""]))
 
       File.write!(fake_ssh, """
       #!/bin/sh
@@ -1334,11 +1444,11 @@ defmodule SymphonyElixir.CoreTest do
       printf 'ARGV:%s\\n' "$*" >> "$trace_file"
 
       case "$*" in
-        *worker-a*"__SYMPHONY_WORKSPACE__"*)
+        *worker-a*__SYMPHONY_WORKSPACE__*)
           printf '%s\\n' 'worker-a prepare failed' >&2
           exit 75
           ;;
-        *worker-b*"__SYMPHONY_WORKSPACE__"*)
+        *worker-b*__SYMPHONY_WORKSPACE__*)
           printf '%s\\t%s\\t%s\\n' '__SYMPHONY_WORKSPACE__' '1' '/remote/home/.symphony-remote-workspaces/MT-SSH-FAILOVER'
           exit 0
           ;;
@@ -1349,6 +1459,7 @@ defmodule SymphonyElixir.CoreTest do
       """)
 
       File.chmod!(fake_ssh, 0o755)
+      maybe_write_windows_wrapper!(fake_ssh)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: "~/.symphony-remote-workspaces",
@@ -1505,6 +1616,24 @@ defmodule SymphonyElixir.CoreTest do
       File.rm_rf(test_root)
     end
   end
+
+  defp maybe_write_windows_wrapper!(script_path) do
+    if windows?() do
+      File.write!(script_path <> ".bat", """
+      @echo off
+      sh "%~dp0#{Path.basename(script_path)}" %*
+      exit /b %ERRORLEVEL%
+      """)
+    end
+  end
+
+  defp path_join(paths), do: Enum.join(paths, <<path_separator()::utf8>>)
+
+  defp path_separator do
+    if windows?(), do: ?;, else: ?:
+  end
+
+  defp windows?, do: match?({:win32, _}, :os.type())
 
   test "agent runner stops continuing once agent.max_turns is reached" do
     test_root =

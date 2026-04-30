@@ -305,12 +305,13 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
       File.mkdir_p!(bin_dir)
       File.write!(log_path, "")
       original_path = System.get_env("PATH") || ""
-      path_with_binaries = Enum.join([bin_dir, original_path], ":")
+      path_with_binaries = path_join([bin_dir, original_path])
 
       Enum.each(scripts, fn {name, script} ->
         path = Path.join(bin_dir, name)
         File.write!(path, script)
         File.chmod!(path, 0o755)
+        maybe_write_windows_wrapper!(path)
       end)
 
       with_env(
@@ -328,8 +329,26 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
   end
 
   defp with_path(paths, fun) do
-    with_env(%{"PATH" => Enum.join(paths, ":")}, fun)
+    with_env(%{"PATH" => path_join(paths)}, fun)
   end
+
+  defp maybe_write_windows_wrapper!(script_path) do
+    if windows?() do
+      File.write!(script_path <> ".bat", """
+      @echo off
+      sh "%~dp0#{Path.basename(script_path)}" %*
+      exit /b %ERRORLEVEL%
+      """)
+    end
+  end
+
+  defp path_join(paths), do: Enum.join(paths, <<path_separator()::utf8>>)
+
+  defp path_separator do
+    if windows?(), do: ?;, else: ?:
+  end
+
+  defp windows?, do: match?({:win32, _}, :os.type())
 
   defp with_env(overrides, fun) do
     keys = Map.keys(overrides)

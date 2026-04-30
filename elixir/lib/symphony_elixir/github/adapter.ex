@@ -24,7 +24,14 @@ defmodule SymphonyElixir.GitHub.Adapter do
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name)
       when is_binary(issue_id) and is_binary(state_name) do
-    client_module().update_issue_state(issue_id, state_name)
+    with {:ok, status_update} <- client_module().resolve_status_update(issue_id, state_name),
+         :ok <- client_module().update_project_item_status(status_update),
+         :ok <- client_module().patch_issue_state(issue_id, state_name) do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :github_issue_update_failed}
+    end
   end
 
   defp client_module do

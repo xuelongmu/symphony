@@ -16,8 +16,8 @@ behavior.
 ## 1. Problem Statement
 
 Symphony is a long-running automation service that continuously reads work from an issue tracker
-(Linear in this specification version), creates an isolated workspace for each issue, and runs a
-coding agent session for that issue inside the workspace.
+(Linear or GitHub Issues + Projects v2 in this specification version), creates an isolated
+workspace for each issue, and runs a coding agent session for that issue inside the workspace.
 
 The service solves four operational problems:
 
@@ -137,7 +137,8 @@ Symphony is easiest to port when kept in these layers:
 
 ### 3.3 External Dependencies
 
-- Issue tracker API (Linear for `tracker.kind: linear`; GitHub for `tracker.kind: github`).
+- Issue tracker API (Linear for `tracker.kind: linear`, or GitHub Issues + Projects v2 for
+  `tracker.kind: github`).
 - Local filesystem for workspaces and logs.
 - OPTIONAL workspace population tooling (for example Git CLI, if used).
 - Coding-agent executable that supports the targeted Codex app-server mode.
@@ -355,23 +356,59 @@ Fields:
   - Current supported values: `linear`, `github`
 - `endpoint` (string)
   - Default for `tracker.kind == "linear"`: `https://api.linear.app/graphql`
+  - Default for `tracker.kind == "github"`: `https://api.github.com`
 - `api_key` (string)
   - MAY be a literal token or `$VAR_NAME`.
   - Canonical environment variable for `tracker.kind == "linear"`: `LINEAR_API_KEY`.
+  - Canonical environment variable for `tracker.kind == "github"`: `GITHUB_TOKEN`.
   - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
 - `project_slug` (string)
   - REQUIRED for dispatch when `tracker.kind == "linear"`.
 - `github` (object)
-  - REQUIRED for dispatch when `tracker.kind == "github"`.
+  - OPTIONAL preferred grouped GitHub config for new workflows.
   - Fields:
     - `owner` (string)
     - `repo` (string)
     - `project_number` (positive integer)
     - `status_field` (string, default `Status`)
+- `owner` (string)
+  - REQUIRED for dispatch when `tracker.kind == "github"`.
+  - GitHub repository owner or organization for the issue source repository.
+- `repo` (string)
+  - REQUIRED for dispatch when `tracker.kind == "github"`.
+  - GitHub repository name for the issue source repository.
+- `project_owner` (string)
+  - REQUIRED for dispatch when `tracker.kind == "github"`.
+  - GitHub user or organization that owns the Projects v2 project.
+- `project_owner_type` (string)
+  - REQUIRED for dispatch when `tracker.kind == "github"`.
+  - Supported values: `user`, `organization`.
+  - Default: `user`
+- `project_number` (integer)
+  - REQUIRED for dispatch when `tracker.kind == "github"`.
+  - The Projects v2 project number from the project URL.
+- `project_status_field` (string)
+  - REQUIRED for dispatch when `tracker.kind == "github"`.
+  - Default: `Status`
+  - The single-select Projects v2 field whose option name is treated as the normalized issue
+    `state`.
 - `active_states` (list of strings)
   - Default: `Todo`, `In Progress`
 - `terminal_states` (list of strings)
   - Default: `Closed`, `Cancelled`, `Canceled`, `Duplicate`, `Done`
+
+GitHub tracker notes:
+
+- GitHub Issues only exposes `open` and `closed`; the issue open/closed state is not expressive
+  enough for Symphony workflow dispatch. For `tracker.kind == "github"`, Projects v2
+  `project_status_field` is the workflow state source used for `active_states`,
+  `terminal_states`, prompt rendering, and reconciliation.
+- Candidate issues come from issues in `owner/repo` that are present in the configured Projects v2
+  project and whose `project_status_field` option is in `active_states`.
+- The GitHub token MUST be able to read and update repository issues and read and update the
+  configured Projects v2 project. For fine-grained tokens, grant repository Issues read/write and
+  project read/write access for the project owner. For classic personal access tokens, Projects v2
+  GraphQL queries use `read:project`, and GraphQL mutations use `project`.
 
 #### 5.3.2 `polling` (object)
 
@@ -587,7 +624,10 @@ Validation checks:
 - `tracker.kind` is present and supported.
 - `tracker.api_key` is present after `$` resolution.
 - `tracker.project_slug` is present when REQUIRED by the selected tracker kind.
-- `tracker.github.owner`, `tracker.github.repo`, and `tracker.github.project_number` are present when REQUIRED by the selected tracker kind.
+- GitHub tracker fields (`owner`, `repo`, `project_owner`, `project_owner_type`,
+  `project_number`, `project_status_field`, `active_states`, and `terminal_states`) are present
+  when REQUIRED by the selected tracker kind. Nested `tracker.github.*` fields MAY supply
+  `owner`, `repo`, `project_number`, and `project_status_field`.
 - `codex.command` is present and non-empty.
 
 ### 6.4 Core Config Fields Summary (Cheat Sheet)
@@ -597,13 +637,21 @@ Extension fields are documented in the extension section that defines them. Core
 not require recognizing or validating extension fields unless that extension is implemented.
 
 - `tracker.kind`: string, REQUIRED, currently `linear` or `github`
-- `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`
-- `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`; `GITHUB_TOKEN`/`GH_TOKEN` when `tracker.kind=github`
+- `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`,
+  default `https://api.github.com` when `tracker.kind=github`
+- `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`,
+  canonical env `GITHUB_TOKEN`/`GH_TOKEN` when `tracker.kind=github`
 - `tracker.project_slug`: string, REQUIRED when `tracker.kind=linear`
-- `tracker.github.owner`: string, REQUIRED when `tracker.kind=github`
-- `tracker.github.repo`: string, REQUIRED when `tracker.kind=github`
-- `tracker.github.project_number`: positive integer, REQUIRED when `tracker.kind=github`
-- `tracker.github.status_field`: string, default `Status`
+- `tracker.owner`: string, REQUIRED when `tracker.kind=github`
+- `tracker.repo`: string, REQUIRED when `tracker.kind=github`
+- `tracker.project_owner`: string, REQUIRED when `tracker.kind=github`
+- `tracker.project_owner_type`: string, REQUIRED when `tracker.kind=github`, default `user`
+- `tracker.project_number`: integer, REQUIRED when `tracker.kind=github`
+- `tracker.project_status_field`: string, REQUIRED when `tracker.kind=github`, default `Status`
+- `tracker.github.owner`: optional source for `tracker.owner` and default `tracker.project_owner`
+- `tracker.github.repo`: optional source for `tracker.repo`
+- `tracker.github.project_number`: optional source for `tracker.project_number`
+- `tracker.github.status_field`: optional source for `tracker.project_status_field`, default `Status`
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `polling.interval_ms`: integer, default `30000`
@@ -1200,17 +1248,51 @@ Important:
 A non-Linear implementation MAY change transport details, but the normalized outputs MUST match the
 domain model in Section 4.
 
-### 11.3 Query Semantics (GitHub)
+### 11.3 Query Semantics (GitHub Issues + Projects v2)
 
 GitHub-specific requirements for `tracker.kind == "github"`:
 
-- Use GitHub Projects v2 as the workflow-state source.
-- `tracker.github.owner`, `tracker.github.repo`, and `tracker.github.project_number` identify the project-backed queue.
-- `tracker.github.status_field` identifies the single-select field used as normalized issue `state`.
-- Candidate reads include project items whose content is a GitHub Issue in the configured repository.
-- `blocked_by` is derived from GitHub issue dependency relationships (`blockedBy`/blocking relationship data).
-- Closed GitHub blockers SHOULD normalize to `Closed`; open blockers SHOULD normalize to a non-terminal state such as `Open` when project status is unavailable.
-- Use direct GitHub API calls for issue relationships until native `gh issue` dependency commands exist.
+- `tracker.kind == "github"`
+- REST endpoint default `https://api.github.com`; GraphQL endpoint is derived from it as the
+  corresponding GitHub GraphQL API endpoint.
+- Auth token sent in the `Authorization` header.
+- `tracker.owner` and `tracker.repo` identify the issue source repository.
+- `tracker.project_owner`, `tracker.project_owner_type`, and `tracker.project_number` identify the
+  Projects v2 project to query.
+- `tracker.project_owner_type == "user"` resolves the project through the GraphQL `user` owner.
+- `tracker.project_owner_type == "organization"` resolves the project through the GraphQL
+  `organization` owner.
+- `tracker.project_status_field` names the Projects v2 single-select field used as the normalized
+  issue `state`.
+- Candidate issue query filters to project items whose content is an issue in `owner/repo` and whose
+  `project_status_field` option is in `tracker.active_states`.
+- Issue-state refresh by ID returns the current Projects v2 `project_status_field` option for each
+  configured project item.
+- Terminal cleanup fetches project issues whose `project_status_field` option is in
+  `tracker.terminal_states`.
+- `blocked_by` is derived from GitHub issue dependency relationships (`blockedBy`/blocking
+  relationship data).
+- Closed GitHub blockers SHOULD normalize to `Closed`; open blockers SHOULD normalize to a
+  non-terminal state such as `Open` when project status is unavailable.
+- Use direct GitHub API calls for issue relationships until native `gh issue` dependency commands
+  exist.
+- Pagination REQUIRED for project items and issue lists.
+- Page size default: `50`
+- Network timeout: `30000 ms`
+
+Important:
+
+- GitHub Issues only exposes `open` and `closed`. For GitHub tracker workflows, the Projects v2
+  Status field, or the configured `project_status_field`, is the authoritative workflow state.
+- The normalized issue `identifier` SHOULD be a stable, human-readable, route-safe single path
+  segment, such as `github-<owner>-<repo>-<number>`. It MUST NOT include `/`, `#`, or query/fragment
+  delimiters because observability API routes embed the identifier as one path segment. The
+  normalized `url` SHOULD be the issue's HTML URL.
+- Token permissions must cover both issue access and project access. Fine-grained tokens need
+  repository Issues read/write plus project read/write access for the project owner. Classic
+  personal access tokens need `read:project` for Projects v2 GraphQL queries and `project` for
+  Projects v2 GraphQL mutations; workflows that edit issues also need issue read/write authority
+  for the repository.
 
 ### 11.4 Normalization Rules
 
@@ -1236,6 +1318,12 @@ RECOMMENDED error categories:
 - `linear_graphql_errors`
 - `linear_unknown_payload`
 - `linear_missing_end_cursor` (pagination integrity error)
+- `github_api_request` (transport failures)
+- `github_api_status` (non-2xx HTTP)
+- `github_graphql_errors`
+- `github_unknown_payload`
+- `github_missing_project_status_field`
+- `github_missing_end_cursor` (pagination integrity error)
 
 Orchestrator behavior on tracker errors:
 
@@ -1570,7 +1658,7 @@ API design notes:
 1. `Workflow/Config Failures`
    - Missing `WORKFLOW.md`
    - Invalid YAML front matter
-   - Unsupported tracker kind or missing tracker credentials/project slug
+   - Unsupported tracker kind or missing tracker credentials/project identity
    - Missing coding-agent executable
 
 2. `Workspace Failures`
@@ -1712,10 +1800,11 @@ Possible hardening measures include:
   of running with a maximally permissive configuration.
 - Adding external isolation layers such as OS/container/VM sandboxing, network restrictions, or
   separate credentials beyond the built-in Codex policy controls.
-- Filtering which Linear issues, projects, teams, labels, or other tracker sources are eligible for
-  dispatch so untrusted or out-of-scope tasks do not automatically reach the agent.
-- Narrowing the `linear_graphql` tool so it can only read or mutate data inside the
-  intended project scope, rather than exposing general workspace-wide tracker access.
+- Filtering which Linear or GitHub issues, projects, teams, labels, or other tracker sources are
+  eligible for dispatch so untrusted or out-of-scope tasks do not automatically reach the agent.
+- Narrowing tracker-specific agent tools, such as `linear_graphql`, so they can only read or mutate
+  data inside the intended project scope, rather than exposing general workspace-wide tracker
+  access.
 - Reducing the set of client-side tools, credentials, filesystem paths, and network destinations
   available to the agent to the minimum needed for the workflow.
 
@@ -1991,6 +2080,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Config defaults apply when OPTIONAL values are missing
 - `tracker.kind` validation enforces currently supported kinds (`linear`, `github`)
 - `tracker.api_key` works (including `$VAR` indirection)
+- GitHub tracker validation enforces `owner`, `repo`, `project_owner`, `project_owner_type`,
+  `project_number`, `project_status_field`, `active_states`, and `terminal_states`
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
 - `codex.command` is preserved as a shell command string
@@ -2015,8 +2106,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 
 ### 17.3 Issue Tracker Client
 
-- Candidate issue fetch uses active states and project slug
+- Candidate issue fetch uses active states and the selected tracker's project identity
 - Linear query uses the specified project filter field (`slugId`)
+- GitHub query uses the configured Projects v2 `project_status_field` as the normalized issue state
+- GitHub issue `open`/`closed` state is not used as the workflow state source
 - Empty `fetch_issues_by_states([])` returns empty without API call
 - Pagination preserves order across multiple pages
 - Blockers are normalized from inverse relations of type `blocks`
@@ -2142,12 +2235,13 @@ Use the same validation profiles as Section 17:
   exposes the baseline endpoints/error semantics in Section 13.7 if shipped.
 - `linear_graphql` client-side tool extension exposes raw Linear GraphQL access through the
   app-server session using configured Symphony auth.
+- GitHub tracker adapter supports GitHub Issues + Projects v2 Status-based workflow state.
 - TODO: Persist retry queue and session metadata across process restarts.
 - TODO: Make observability settings configurable in workflow front matter without prescribing UI
   implementation details.
 - TODO: Add first-class tracker write APIs (comments/state transitions) in the orchestrator instead
   of only via agent tools.
-- TODO: Add pluggable issue tracker adapters beyond Linear.
+- TODO: Add pluggable issue tracker adapters beyond Linear and GitHub.
 
 ### 18.3 Operational Validation Before Production (RECOMMENDED)
 

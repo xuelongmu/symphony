@@ -12,7 +12,7 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Config
       alias SymphonyElixir.HttpServer
       alias SymphonyElixir.Linear.Client
-      alias SymphonyElixir.Linear.Issue
+      alias SymphonyElixir.Tracker.Issue
       alias SymphonyElixir.Orchestrator
       alias SymphonyElixir.PromptBuilder
       alias SymphonyElixir.StatusDashboard
@@ -101,6 +101,12 @@ defmodule SymphonyElixir.TestSupport do
           tracker_github_repo: nil,
           tracker_github_project_number: nil,
           tracker_github_status_field: "Status",
+          tracker_owner: nil,
+          tracker_repo: nil,
+          tracker_project_owner: nil,
+          tracker_project_owner_type: nil,
+          tracker_project_number: nil,
+          tracker_project_status_field: nil,
           tracker_assignee: nil,
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
@@ -145,6 +151,12 @@ defmodule SymphonyElixir.TestSupport do
     tracker_github_repo = Keyword.get(config, :tracker_github_repo)
     tracker_github_project_number = Keyword.get(config, :tracker_github_project_number)
     tracker_github_status_field = Keyword.get(config, :tracker_github_status_field)
+    tracker_owner = Keyword.get(config, :tracker_owner)
+    tracker_repo = Keyword.get(config, :tracker_repo)
+    tracker_project_owner = Keyword.get(config, :tracker_project_owner)
+    tracker_project_owner_type = Keyword.get(config, :tracker_project_owner_type)
+    tracker_project_number = Keyword.get(config, :tracker_project_number)
+    tracker_project_status_field = Keyword.get(config, :tracker_project_status_field)
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
@@ -192,6 +204,12 @@ defmodule SymphonyElixir.TestSupport do
           tracker_github_project_number,
           tracker_github_status_field
         ),
+        "  owner: #{yaml_value(tracker_owner)}",
+        "  repo: #{yaml_value(tracker_repo)}",
+        "  project_owner: #{yaml_value(tracker_project_owner)}",
+        "  project_owner_type: #{yaml_value(tracker_project_owner_type)}",
+        "  project_number: #{yaml_value(tracker_project_number)}",
+        "  project_status_field: #{yaml_value(tracker_project_status_field)}",
         "  assignee: #{yaml_value(tracker_assignee)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
@@ -226,7 +244,12 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp yaml_value(value) when is_binary(value) do
-    "\"" <> String.replace(value, "\"", "\\\"") <> "\""
+    escaped =
+      value
+      |> String.replace("\\", "\\\\")
+      |> String.replace("\"", "\\\"")
+
+    "\"" <> escaped <> "\""
   end
 
   defp yaml_value(value) when is_integer(value), do: to_string(value)

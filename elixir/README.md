@@ -53,12 +53,68 @@ workspaces.
 
 ## Prerequisites
 
-We recommend using [mise](https://mise.jdx.dev/) to manage Elixir/Erlang versions.
+Run commands from `elixir/` unless the command uses `make -C elixir ...` from the repository root.
+
+We recommend [mise](https://mise.jdx.dev/installing-mise.html) to manage the Elixir and Erlang
+versions pinned by this repo. `mise install` reads [`mise.toml`](mise.toml) and installs the
+required runtime.
+
+Required tools:
+
+- Git.
+- Make. `mise` does not install Make for this repo; install it with your OS package manager.
+- Elixir and Erlang, installed through `mise install`.
+- Codex CLI if you want to run Symphony against real work, because the default workflow starts
+  `codex app-server`.
+- `LINEAR_API_KEY` when running against Linear.
+
+Optional tools:
+
+- Docker with Compose for the live SSH-worker E2E path. `make e2e` uses Docker when
+  `SYMPHONY_LIVE_SSH_WORKER_HOSTS` is unset.
+
+### Install Host Tools
+
+On macOS or Linux, install Git and Make with your normal package manager, then install
+[`mise`](https://mise.jdx.dev/installing-mise.html):
 
 ```bash
+curl https://mise.run | sh
+```
+
+On Windows, use [Scoop](https://scoop.sh/) from PowerShell:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+irm get.scoop.sh | iex
+scoop install git make mise
+```
+
+Then install the pinned Elixir runtime:
+
+```bash
+cd elixir
+mise trust
 mise install
 mise exec -- elixir --version
 ```
+
+On Windows, make sure Git Bash is on `PATH`; Symphony starts Codex through `bash` during real runs.
+
+### Verify
+
+From the repository root:
+
+```bash
+git --version
+make -C elixir help
+elixir --version
+erl -noshell -eval "erlang:display(erlang:system_info(otp_release)), halt()."
+mix --version
+```
+
+If plain `elixir` or `mix` commands do not resolve, run commands through `mise exec -- ...` from
+`elixir/`, or activate `mise` in your shell.
 
 ## Run
 
@@ -67,10 +123,26 @@ git clone https://github.com/openai/symphony
 cd symphony/elixir
 mise trust
 mise install
+mise exec -- mix local.hex --force
+mise exec -- mix local.rebar --force
 mise exec -- mix setup
 mise exec -- mix build
 mise exec -- ./bin/symphony ./WORKFLOW.md
 ```
+
+On Windows, run the built escript with `escript`:
+
+```powershell
+mise exec -- escript .\bin\symphony .\WORKFLOW.md
+```
+
+To enable the optional dashboard while Symphony runs:
+
+```bash
+./bin/symphony --port 4000 ./WORKFLOW.md
+```
+
+Then open `http://127.0.0.1:4000/`.
 
 ## Configuration
 
@@ -230,6 +302,12 @@ The observability UI now runs on a minimal Phoenix stack:
 
 ```bash
 make all
+```
+
+From the repository root, use:
+
+```bash
+make -C elixir all
 ```
 
 Run the real external end-to-end test only when you want Symphony to create disposable Linear

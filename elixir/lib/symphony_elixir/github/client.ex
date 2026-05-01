@@ -61,6 +61,10 @@ defmodule SymphonyElixir.GitHub.Client do
                       }
                     }
                   }
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
                 }
               }
               ... on PullRequest {
@@ -135,6 +139,10 @@ defmodule SymphonyElixir.GitHub.Client do
                       }
                     }
                   }
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
                 }
               }
               ... on PullRequest {
@@ -147,6 +155,34 @@ defmodule SymphonyElixir.GitHub.Client do
               ... on ProjectV2ItemFieldSingleSelectValue {
                 name
                 optionId
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+  """
+
+  @issue_blocked_by_query """
+  query SymphonyGitHubIssueBlockers($issueId: ID!, $first: Int!, $after: String) {
+    node(id: $issueId) {
+      ... on Issue {
+        blockedBy(first: $first, after: $after) {
+          nodes {
+            id
+            number
+            title
+            state
+            url
+            repository {
+              name
+              owner {
+                login
               }
             }
           }
@@ -457,7 +493,8 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   defp fetch_project_issues(graphql_fun) when is_function(graphql_fun, 2) do
-    with {:ok, _project_id, items} <- fetch_project_items(graphql_fun) do
+    with {:ok, _project_id, items} <- fetch_project_items(graphql_fun),
+         {:ok, items} <- hydrate_blocker_pages(items, graphql_fun) do
       tracker = Config.settings!().tracker
 
       issues =
@@ -466,6 +503,77 @@ defmodule SymphonyElixir.GitHub.Client do
         |> Enum.reject(&is_nil/1)
 
       {:ok, issues}
+    end
+  end
+
+  defp hydrate_blocker_pages(items, graphql_fun) when is_list(items) and is_function(graphql_fun, 2) do
+    items
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, acc_items} ->
+      case hydrate_project_item_blockers(item, graphql_fun) do
+        {:ok, hydrated_item} -> {:cont, {:ok, [hydrated_item | acc_items]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, hydrated_items} -> {:ok, Enum.reverse(hydrated_items)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp hydrate_project_item_blockers(
+         %{"content" => %{"__typename" => "Issue", "id" => issue_id, "blockedBy" => blocked_by}} = item,
+         graphql_fun
+       )
+       when is_binary(issue_id) and is_map(blocked_by) do
+    blockers = Map.get(blocked_by, "nodes", [])
+
+    with true <- is_list(blockers),
+         {:ok, page_info} <- decode_blocker_page_info(blocked_by),
+         {:ok, hydrated_blockers} <-
+           fetch_remaining_blocker_pages(issue_id, page_info, graphql_fun, blockers) do
+      {:ok, put_in(item, ["content", "blockedBy", "nodes"], hydrated_blockers)}
+    else
+      false -> {:error, :github_unknown_issue_blockers_payload}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp hydrate_project_item_blockers(item, _graphql_fun), do: {:ok, item}
+
+  defp fetch_remaining_blocker_pages(issue_id, page_info, graphql_fun, acc_blockers) do
+    case next_page_cursor(page_info, :github_missing_blocked_by_end_cursor) do
+      {:ok, next_cursor} ->
+        do_fetch_blocker_page(issue_id, graphql_fun, next_cursor, acc_blockers)
+
+      :done ->
+        {:ok, acc_blockers}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_fetch_blocker_page(issue_id, graphql_fun, after_cursor, acc_blockers) do
+    variables = %{
+      issueId: issue_id,
+      first: @blocked_by_page_size,
+      after: after_cursor
+    }
+
+    with {:ok, body} <- graphql_fun.(@issue_blocked_by_query, variables),
+         {:ok, blockers, page_info} <- decode_issue_blockers_response(body) do
+      updated_blockers = acc_blockers ++ blockers
+
+      case next_page_cursor(page_info, :github_missing_blocked_by_end_cursor) do
+        {:ok, next_cursor} ->
+          do_fetch_blocker_page(issue_id, graphql_fun, next_cursor, updated_blockers)
+
+        :done ->
+          {:ok, updated_blockers}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -791,6 +899,25 @@ defmodule SymphonyElixir.GitHub.Client do
 
   defp decode_project_items_response(_response, _owner_key), do: {:error, :github_unknown_project_items_payload}
 
+  defp decode_issue_blockers_response(%{"errors" => errors}), do: {:error, {:github_graphql_errors, errors}}
+
+  defp decode_issue_blockers_response(%{"data" => %{"node" => nil}}), do: {:error, :github_issue_not_found}
+
+  defp decode_issue_blockers_response(%{"data" => %{"node" => %{"blockedBy" => blocked_by}}})
+       when is_map(blocked_by) do
+    case blocked_by do
+      %{"nodes" => blockers} when is_list(blockers) ->
+        with {:ok, page_info} <- decode_blocker_page_info(blocked_by) do
+          {:ok, blockers, page_info}
+        end
+
+      _ ->
+        {:error, :github_unknown_issue_blockers_payload}
+    end
+  end
+
+  defp decode_issue_blockers_response(_response), do: {:error, :github_unknown_issue_blockers_payload}
+
   defp decode_project_fields_response(%{"errors" => errors}, _owner_key), do: {:error, {:github_graphql_errors, errors}}
 
   defp decode_project_fields_response(%{"data" => data}, owner_key) when is_map(data) do
@@ -814,6 +941,12 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   defp decode_project_fields_response(_response, _owner_key), do: {:error, :github_unknown_project_fields_payload}
+
+  defp decode_blocker_page_info(%{"pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}}) do
+    {:ok, %{has_next_page: has_next_page == true, end_cursor: end_cursor}}
+  end
+
+  defp decode_blocker_page_info(_blocked_by), do: {:error, :github_unknown_issue_blockers_payload}
 
   defp normalize_project_item(%{"content" => %{"__typename" => "Issue"} = issue} = item, tracker) do
     if repository_matches?(issue, tracker) do

@@ -459,7 +459,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
                        },
                        "assignees" => %{"nodes" => []},
                        "labels" => %{"nodes" => []},
-                       "blockedBy" => %{"nodes" => []}
+                       "blockedBy" => %{
+                         "nodes" => [],
+                         "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+                       }
                      }
                    }
                  ],

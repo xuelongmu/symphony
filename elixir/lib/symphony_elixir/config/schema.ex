@@ -345,6 +345,7 @@ defmodule SymphonyElixir.Config.Schema do
     config
     |> normalize_keys()
     |> drop_nil_values()
+    |> merge_nested_github_tracker_attrs()
     |> changeset()
     |> apply_action(:validate)
     |> case do
@@ -433,6 +434,30 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:server, with: &Server.changeset/2)
   end
 
+  defp merge_nested_github_tracker_attrs(%{"tracker" => %{} = tracker_attrs} = config) do
+    github_attrs = Map.get(tracker_attrs, "github") || %{}
+
+    tracker_attrs =
+      tracker_attrs
+      |> put_missing_tracker_attr("owner", Map.get(github_attrs, "owner"))
+      |> put_missing_tracker_attr("repo", Map.get(github_attrs, "repo"))
+      |> put_missing_tracker_attr("project_owner", Map.get(github_attrs, "owner"))
+      |> put_missing_tracker_attr("project_number", Map.get(github_attrs, "project_number"))
+      |> put_missing_tracker_attr("project_status_field", Map.get(github_attrs, "status_field"))
+
+    Map.put(config, "tracker", tracker_attrs)
+  end
+
+  defp merge_nested_github_tracker_attrs(config), do: config
+
+  defp put_missing_tracker_attr(attrs, key, value) do
+    cond do
+      Map.has_key?(attrs, key) -> attrs
+      is_nil(value) -> attrs
+      true -> Map.put(attrs, key, value)
+    end
+  end
+
   defp finalize_settings(settings) do
     tracker =
       settings.tracker
@@ -475,7 +500,7 @@ defmodule SymphonyElixir.Config.Schema do
         repo: tracker.repo || github.repo,
         project_owner: tracker.project_owner || github.owner,
         project_number: tracker.project_number || github.project_number,
-        project_status_field: tracker.project_status_field || github.status_field
+        project_status_field: tracker.project_status_field
     }
   end
 

@@ -113,6 +113,7 @@ defmodule SymphonyElixir.CoreTest do
       tracker_github_owner: "openai",
       tracker_github_repo: "symphony",
       tracker_github_project_number: 7,
+      tracker_github_status_field: "Workflow State",
       review_enabled: true,
       review_state: "Agent Review",
       review_max_rounds: 4
@@ -123,12 +124,12 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.github.owner == "openai"
     assert config.tracker.github.repo == "symphony"
     assert config.tracker.github.project_number == 7
-    assert config.tracker.github.status_field == "Status"
+    assert config.tracker.github.status_field == "Workflow State"
     assert config.tracker.owner == "openai"
     assert config.tracker.repo == "symphony"
     assert config.tracker.project_owner == "openai"
     assert config.tracker.project_number == 7
-    assert config.tracker.project_status_field == "Status"
+    assert config.tracker.project_status_field == "Workflow State"
     assert config.review.enabled
     assert config.review.max_rounds == 4
   end

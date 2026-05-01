@@ -239,6 +239,101 @@ defmodule SymphonyElixir.CoreTest do
     refute MapSet.member?(updated_state.claimed, issue.id)
   end
 
+  test "orchestrator clears review rounds when a running review issue leaves review state" do
+    issue_id = "issue-review-leaves-state"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      review_enabled: true,
+      review_state: "Agent Review",
+      tracker_active_states: ["Todo", "In Progress", "Agent Review"]
+    )
+
+    state = %Orchestrator.State{
+      running: %{
+        issue_id => %{
+          issue: %Issue{
+            id: issue_id,
+            identifier: "MT-REV-LEAVE",
+            title: "Review leaves state",
+            state: "Agent Review"
+          },
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      retry_attempts: %{},
+      review_rounds: %{issue_id => 2},
+      max_concurrent_agents: 1,
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-REV-LEAVE",
+      title: "Review leaves state",
+      state: "In Progress"
+    }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+    assert updated_state.running[issue_id].issue.state == "In Progress"
+    refute Map.has_key?(updated_state.review_rounds, issue_id)
+  end
+
+  test "orchestrator clears review rounds when a review continuation leaves review state" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    on_exit(fn ->
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
+      restore_app_env(:memory_tracker_recipient, previous_memory_recipient)
+    end)
+
+    issue_id = "issue-review-continuation"
+    retry_token = make_ref()
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-REV-CONT",
+      title: "Review continuation",
+      state: "In Progress"
+    }
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      review_enabled: true,
+      review_state: "Agent Review",
+      tracker_active_states: ["Todo", "In Progress", "Agent Review"]
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    state = %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new([issue_id]),
+      retry_attempts: %{
+        issue_id => %{
+          attempt: 1,
+          retry_token: retry_token,
+          due_at_ms: System.monotonic_time(:millisecond),
+          identifier: "MT-REV-CONT",
+          error: nil
+        }
+      },
+      review_rounds: %{issue_id => 2},
+      max_concurrent_agents: 0,
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    assert {:noreply, updated_state} = Orchestrator.handle_info({:retry_issue, issue_id, retry_token}, state)
+
+    refute Map.has_key?(updated_state.review_rounds, issue_id)
+
+    assert %{attempt: 2, identifier: "MT-REV-CONT", error: "no available orchestrator slots"} =
+             updated_state.retry_attempts[issue_id]
+  end
+
   test "linear api token resolves from LINEAR_API_KEY env var" do
     previous_linear_api_key = System.get_env("LINEAR_API_KEY")
     env_api_key = "test-linear-api-key"

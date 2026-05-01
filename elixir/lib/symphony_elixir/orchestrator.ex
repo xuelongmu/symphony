@@ -361,6 +361,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp reconcile_issue_state(%Issue{} = issue, state, active_states, terminal_states) do
+    state = clear_review_round_unless_review_state(state, issue)
+
     cond do
       terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Issue moved to terminal state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
@@ -403,7 +405,10 @@ defmodule SymphonyElixir.Orchestrator do
         state_acc
       else
         log_missing_running_issue(state_acc, issue_id)
-        terminate_running_issue(state_acc, issue_id, false)
+
+        state_acc
+        |> clear_review_round(issue_id)
+        |> terminate_running_issue(issue_id, false)
       end
     end)
   end
@@ -819,6 +824,17 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp clear_review_round(%State{} = state, _issue_id), do: state
 
+  defp clear_review_round_unless_review_state(%State{} = state, %Issue{id: issue_id} = issue)
+       when is_binary(issue_id) do
+    if agent_role_for_issue(issue) == :review do
+      state
+    else
+      clear_review_round(state, issue_id)
+    end
+  end
+
+  defp clear_review_round_unless_review_state(%State{} = state, _issue), do: state
+
   defp next_handoff_retry_attempt(attempt) when is_integer(attempt) and attempt > 0, do: attempt + 1
   defp next_handoff_retry_attempt(_attempt), do: 1
 
@@ -939,6 +955,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_retry_issue_lookup(%Issue{} = issue, state, issue_id, attempt, metadata) do
     terminal_states = terminal_state_set()
+    state = clear_review_round_unless_review_state(state, issue)
 
     cond do
       terminal_issue_state?(issue.state, terminal_states) ->
@@ -959,7 +976,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_retry_issue_lookup(nil, state, issue_id, _attempt, _metadata) do
     Logger.debug("Issue no longer visible, removing claim issue_id=#{issue_id}")
-    {:noreply, release_issue_claim(state, issue_id)}
+    {:noreply, state |> clear_review_round(issue_id) |> release_issue_claim(issue_id)}
   end
 
   defp cleanup_issue_workspace(identifier, worker_host \\ nil)

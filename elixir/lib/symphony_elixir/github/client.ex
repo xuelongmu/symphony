@@ -493,10 +493,11 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   defp fetch_project_issues(graphql_fun) when is_function(graphql_fun, 2) do
-    with {:ok, _project_id, items} <- fetch_project_items(graphql_fun),
-         {:ok, items} <- hydrate_blocker_pages(items, graphql_fun) do
-      tracker = Config.settings!().tracker
+    tracker = Config.settings!().tracker
 
+    with {:ok, _project_id, items} <- fetch_project_items(graphql_fun),
+         items <- filter_project_issue_items_for_repo(items, tracker),
+         {:ok, items} <- hydrate_blocker_pages(items, graphql_fun) do
       issues =
         items
         |> Enum.map(&normalize_project_item(&1, tracker))
@@ -504,6 +505,13 @@ defmodule SymphonyElixir.GitHub.Client do
 
       {:ok, issues}
     end
+  end
+
+  defp filter_project_issue_items_for_repo(items, tracker) when is_list(items) do
+    Enum.filter(items, fn
+      %{"content" => %{"__typename" => "Issue"} = issue} -> repository_matches?(issue, tracker)
+      _ -> false
+    end)
   end
 
   defp hydrate_blocker_pages(items, graphql_fun) when is_list(items) and is_function(graphql_fun, 2) do

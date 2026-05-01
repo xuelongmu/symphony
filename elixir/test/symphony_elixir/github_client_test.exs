@@ -158,6 +158,50 @@ defmodule SymphonyElixir.GitHubClientTest do
     assert_receive {:issue_blockers_query, %{after: "blocker-cursor-1", first: 50, issueId: "issue-node-1"}}
   end
 
+  test "does not hydrate blocker pages for project issues outside the configured repo" do
+    graphql_fun = fn query, variables ->
+      cond do
+        query =~ "SymphonyGitHubProjectItems" ->
+          send(self(), {:project_items_query, variables})
+
+          {:ok,
+           project_items_response(
+             [
+               project_issue_item(%{
+                 item_id: "item-other-repo",
+                 number: 1,
+                 title: "Other repo blocker pages",
+                 status: "Todo",
+                 state: "OPEN",
+                 repo: "elsewhere",
+                 blocked_by_page_info: %{has_next_page: true, end_cursor: "ignored-cursor"}
+               }),
+               project_issue_item(%{
+                 item_id: "item-2",
+                 number: 2,
+                 title: "Tracked repo issue",
+                 status: "Todo",
+                 state: "OPEN"
+               })
+             ],
+             has_next_page: false,
+             end_cursor: nil
+           )}
+
+        query =~ "SymphonyGitHubIssueBlockers" ->
+          flunk("unexpected blocker hydration query: #{inspect(variables)}")
+      end
+    end
+
+    assert {:ok, [issue]} = GitHubClient.fetch_candidate_issues_for_test(graphql_fun)
+
+    assert issue.id == "2"
+    assert issue.identifier == "github-xuelongmu-symphony-2"
+    assert issue.blocked_by == []
+
+    assert_receive {:project_items_query, %{after: nil, blockedByFirst: 50, first: 50, statusFieldName: "Status"}}
+  end
+
   test "closed issues are returned as Closed for terminal-state fetch even when project status is stale" do
     graphql_fun = fn _query, _variables ->
       {:ok,

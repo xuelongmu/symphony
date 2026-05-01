@@ -3,6 +3,7 @@ import asyncio
 import json
 import random
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -185,7 +186,9 @@ CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 
 def sanitize_terminal_output(value: str) -> str:
-    return CONTROL_CHARS_RE.sub("", value)
+    sanitized = CONTROL_CHARS_RE.sub("", value)
+    encoding = sys.stdout.encoding or "utf-8"
+    return sanitized.encode(encoding, errors="replace").decode(encoding, errors="replace")
 
 
 def check_timestamp(check: dict[str, Any]) -> datetime | None:
@@ -526,7 +529,11 @@ def raise_on_human_feedback(
         raise WatchExit(2)
 
 
-async def wait_for_codex(pr_number: int, checks_done: asyncio.Event) -> None:
+async def wait_for_codex(
+    pr_number: int,
+    head_sha: str,
+    checks_done: asyncio.Event,
+) -> None:
     print("Waiting for review feedback...", flush=True)
     feedback_grace_started_at: float | None = None
     while True:
@@ -556,6 +563,22 @@ async def wait_for_codex(pr_number: int, checks_done: asyncio.Event) -> None:
                 print(body)
                 raise WatchExit(2)
         if checks_done.is_set():
+            check_runs = await get_check_runs(head_sha)
+            if not check_runs:
+                print("Checks disappeared during feedback wait; refusing to merge.")
+                raise WatchExit(3)
+            pending, failed, failures = summarize_checks(check_runs)
+            if failed:
+                print("Checks failed during feedback wait:")
+                for failure in failures:
+                    print(f"- {failure}")
+                raise WatchExit(3)
+            if pending:
+                if feedback_grace_started_at is not None:
+                    print("Checks are no longer green; restarting feedback wait.")
+                feedback_grace_started_at = None
+                await sleep(POLL_SECONDS)
+                continue
             now = monotonic_seconds()
             if feedback_grace_started_at is None:
                 feedback_grace_started_at = now
@@ -607,7 +630,7 @@ async def watch_pr() -> None:
         raise WatchExit(5)
     head_sha = pr.head_sha
     checks_done = asyncio.Event()
-    codex_task = asyncio.create_task(wait_for_codex(pr.number, checks_done))
+    codex_task = asyncio.create_task(wait_for_codex(pr.number, head_sha, checks_done))
     checks_task = asyncio.create_task(wait_for_checks(head_sha, checks_done))
 
     async def head_monitor() -> None:

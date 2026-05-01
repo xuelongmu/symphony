@@ -49,6 +49,8 @@ mix specs.check
 ## PR Requirements
 
 - PR titles must describe the change directly; do not prefix them with `[codex]`.
+- Once a PR exists or review feedback has started, address follow-up work with new commits instead
+  of amending existing commits. Do not force-push unless explicitly requested or needed for recovery.
 - PR body must follow `../.github/pull_request_template.md` exactly.
 - Validate PR body locally when needed:
 

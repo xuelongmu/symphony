@@ -127,19 +127,26 @@ mise exec -- mix local.hex --force
 mise exec -- mix local.rebar --force
 mise exec -- mix setup
 mise exec -- mix build
-mise exec -- ./bin/symphony ./WORKFLOW.md
+mise exec -- ./bin/symphony \
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails \
+  ./WORKFLOW.md
 ```
 
 On Windows, run the built escript with `escript`:
 
 ```powershell
-mise exec -- escript .\bin\symphony .\WORKFLOW.md
+mise exec -- escript .\bin\symphony `
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails `
+  .\WORKFLOW.md
 ```
 
 To enable the optional dashboard while Symphony runs:
 
 ```bash
-./bin/symphony --port 4000 ./WORKFLOW.md
+./bin/symphony \
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails \
+  --port 4000 \
+  ./WORKFLOW.md
 ```
 
 Then open `http://127.0.0.1:4000/`.
@@ -149,10 +156,15 @@ Then open `http://127.0.0.1:4000/`.
 Pass a custom workflow file path to `./bin/symphony` when starting the service:
 
 ```bash
-./bin/symphony /path/to/custom/WORKFLOW.md
+./bin/symphony \
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails \
+  /path/to/custom/WORKFLOW.md
 ```
 
 If no path is passed, Symphony defaults to `./WORKFLOW.md`.
+
+The acknowledgement flag is required because this reference implementation starts Codex without
+the usual product guardrails.
 
 Optional flags:
 

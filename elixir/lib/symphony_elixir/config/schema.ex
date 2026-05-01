@@ -261,7 +261,11 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(attrs, [:enabled, :state, :max_rounds], empty_values: [])
       |> validate_required([:state])
-      |> validate_number(:max_rounds, greater_than: 0)
+      |> validate_max_rounds()
+    end
+
+    defp validate_max_rounds(changeset) do
+      validate_number(changeset, :max_rounds, greater_than: 0)
     end
   end
 

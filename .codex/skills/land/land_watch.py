@@ -9,6 +9,7 @@ from typing import Any
 
 POLL_SECONDS = 10
 CHECKS_APPEAR_TIMEOUT_SECONDS = 120
+FEEDBACK_GRACE_SECONDS = 600
 CODEX_BOTS = {
     "chatgpt-codex-connector[bot]",
     "github-actions[bot]",
@@ -17,6 +18,14 @@ CODEX_BOTS = {
 }
 MAX_GH_RETRIES = 5
 BASE_GH_BACKOFF_SECONDS = 2
+
+
+def monotonic_seconds() -> float:
+    return asyncio.get_running_loop().time()
+
+
+async def sleep(seconds: int | float) -> None:
+    await asyncio.sleep(seconds)
 
 
 @dataclass
@@ -30,6 +39,12 @@ class PrInfo:
 
 class RateLimitError(RuntimeError):
     pass
+
+
+class WatchExit(Exception):
+    def __init__(self, code: int):
+        super().__init__(code)
+        self.code = code
 
 
 def is_rate_limit_error(error: str) -> bool:
@@ -57,7 +72,7 @@ async def run_gh(*args: str) -> str:
         if attempt >= MAX_GH_RETRIES:
             break
         jitter = random.uniform(0, delay_seconds)
-        await asyncio.sleep(min(delay_seconds + jitter, max_delay))
+        await sleep(min(delay_seconds + jitter, max_delay))
         delay_seconds = min(delay_seconds * 2, max_delay)
     raise RateLimitError(last_error)
 
@@ -500,7 +515,7 @@ def raise_on_human_feedback(
             "Reminder: decide whether feedback stays in scope; defer if needed "
             "and note in your root-level update.",
         )
-        raise SystemExit(2)
+        raise WatchExit(2)
     blocking_reviews = filter_blocking_reviews(reviews, review_request_at)
     if blocking_reviews:
         print("Review states/comments detected. Address before merge.")
@@ -508,11 +523,12 @@ def raise_on_human_feedback(
             "Reminder: keep PR title/description aligned with the full scope "
             "when changes expand.",
         )
-        raise SystemExit(2)
+        raise WatchExit(2)
 
 
 async def wait_for_codex(pr_number: int, checks_done: asyncio.Event) -> None:
     print("Waiting for review feedback...", flush=True)
+    feedback_grace_started_at: float | None = None
     while True:
         (
             issue_comments,
@@ -538,10 +554,19 @@ async def wait_for_codex(pr_number: int, checks_done: asyncio.Event) -> None:
             if body:
                 print("Codex left comments. Address feedback before merge.")
                 print(body)
-                raise SystemExit(2)
+                raise WatchExit(2)
         if checks_done.is_set():
-            return
-        await asyncio.sleep(POLL_SECONDS)
+            now = monotonic_seconds()
+            if feedback_grace_started_at is None:
+                feedback_grace_started_at = now
+                print(
+                    f"Checks passed; waiting {FEEDBACK_GRACE_SECONDS}s for review feedback before merge...",
+                    flush=True,
+                )
+            elif now - feedback_grace_started_at >= FEEDBACK_GRACE_SECONDS:
+                print("Feedback wait complete; no review feedback detected.", flush=True)
+                return
+        await sleep(POLL_SECONDS)
 
 
 async def wait_for_checks(head_sha: str, checks_done: asyncio.Event) -> None:
@@ -555,8 +580,8 @@ async def wait_for_checks(head_sha: str, checks_done: asyncio.Event) -> None:
                 print(
                     "No checks detected after 120s; check CI configuration",
                 )
-                raise SystemExit(3)
-            await asyncio.sleep(POLL_SECONDS)
+                raise WatchExit(3)
+            await sleep(POLL_SECONDS)
             continue
         empty_seconds = 0
         pending, failed, failures = summarize_checks(check_runs)
@@ -564,12 +589,12 @@ async def wait_for_checks(head_sha: str, checks_done: asyncio.Event) -> None:
             print("Checks failed:")
             for failure in failures:
                 print(f"- {failure}")
-            raise SystemExit(3)
+            raise WatchExit(3)
         if not pending:
             print("Checks passed")
             checks_done.set()
             return
-        await asyncio.sleep(POLL_SECONDS)
+        await sleep(POLL_SECONDS)
 
 
 async def watch_pr() -> None:
@@ -579,7 +604,7 @@ async def watch_pr() -> None:
             "PR has merge conflicts. Resolve/rebase against main and push before "
             "running land_watch again.",
         )
-        raise SystemExit(5)
+        raise WatchExit(5)
     head_sha = pr.head_sha
     checks_done = asyncio.Event()
     codex_task = asyncio.create_task(wait_for_codex(pr.number, checks_done))
@@ -593,11 +618,11 @@ async def watch_pr() -> None:
                     "PR has merge conflicts. Resolve/rebase against main and push "
                     "before running land_watch again.",
                 )
-                raise SystemExit(5)
+                raise WatchExit(5)
             if current.head_sha != head_sha:
                 print("PR head updated; pull/amend/force-push to retrigger CI")
-                raise SystemExit(4)
-            await asyncio.sleep(POLL_SECONDS)
+                raise WatchExit(4)
+            await sleep(POLL_SECONDS)
 
     monitor_task = asyncio.create_task(head_monitor())
     success_task = asyncio.gather(codex_task, checks_task)
@@ -608,6 +633,8 @@ async def watch_pr() -> None:
     )
     for task in pending:
         task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
     for task in done:
         exc = task.exception()
         if exc:
@@ -617,5 +644,7 @@ async def watch_pr() -> None:
 if __name__ == "__main__":
     try:
         asyncio.run(watch_pr())
+    except WatchExit as exc:
+        raise SystemExit(exc.code) from None
     except SystemExit as exc:
         raise SystemExit(exc.code) from None

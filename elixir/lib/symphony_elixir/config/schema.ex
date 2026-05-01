@@ -485,11 +485,18 @@ defmodule SymphonyElixir.Config.Schema do
     %{settings | tracker: tracker, workspace: workspace, codex: codex}
   end
 
-  defp tracker_api_key_fallback("github") do
-    System.get_env("GITHUB_TOKEN") || System.get_env("GH_TOKEN")
-  end
+  defp tracker_api_key_fallback("github"), do: first_present_env(["GITHUB_TOKEN", "GH_TOKEN"])
 
   defp tracker_api_key_fallback(_kind), do: System.get_env("LINEAR_API_KEY")
+
+  defp first_present_env(names) when is_list(names) do
+    Enum.find_value(names, fn name ->
+      case normalize_secret_value(System.get_env(name)) do
+        nil -> false
+        value -> value
+      end
+    end)
+  end
 
   defp merge_nested_github_tracker_fields(%Tracker{} = tracker) do
     github = tracker.github || %Tracker.Github{}

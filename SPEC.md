@@ -482,7 +482,8 @@ Fields:
   - When enabled, issues in this state are dispatched with review-agent prompt context.
 - `max_rounds` (positive integer)
   - Default: `3`
-  - Workflow prompt uses this as the automated review loop cap.
+  - Caps automated review-agent dispatches for an issue.
+  - After the cap is reached, the orchestrator moves the issue to `Human Review`.
 
 #### 5.3.7 `codex` (object)
 

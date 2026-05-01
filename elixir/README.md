@@ -187,14 +187,16 @@ Notes:
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
 - `review.enabled` enables the automated `Agent Review` role/state loop. Review agents inspect and
   route PRs but do not make implementation changes.
+- `review.max_rounds` caps automated review-agent dispatches before Symphony hands the issue to
+  `Human Review`. Default: `3`.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, agent role, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
-- `tracker.api_key` reads from `LINEAR_API_KEY` for Linear or `GITHUB_TOKEN` for GitHub when unset
-  or when value is the matching `$VAR`.
+- `tracker.api_key` reads from `LINEAR_API_KEY` for Linear or `GITHUB_TOKEN`/`GH_TOKEN` for GitHub
+  when unset or when value is the matching `$VAR`.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the

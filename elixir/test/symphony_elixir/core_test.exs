@@ -195,6 +195,50 @@ defmodule SymphonyElixir.CoreTest do
            }) == :implementation
   end
 
+  test "orchestrator hands off agent review after max rounds" do
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    previous_memory_recipient = Application.get_env(:symphony_elixir, :memory_tracker_recipient)
+
+    on_exit(fn ->
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
+      restore_app_env(:memory_tracker_recipient, previous_memory_recipient)
+    end)
+
+    issue = %Issue{
+      id: "issue-review-cap",
+      identifier: "MT-REV-CAP",
+      title: "Review cap",
+      state: "Agent Review"
+    }
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      review_enabled: true,
+      review_state: "Agent Review",
+      review_max_rounds: 1,
+      tracker_active_states: ["Todo", "In Progress", "Agent Review"]
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    state = %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new([issue.id]),
+      retry_attempts: %{},
+      review_rounds: %{issue.id => 1},
+      max_concurrent_agents: 1,
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    updated_state = Orchestrator.dispatch_issue_for_test(state, issue)
+
+    assert_receive {:memory_tracker_state_update, "issue-review-cap", "Human Review"}
+    refute Map.has_key?(updated_state.running, issue.id)
+    refute Map.has_key?(updated_state.review_rounds, issue.id)
+    refute MapSet.member?(updated_state.claimed, issue.id)
+  end
+
   test "linear api token resolves from LINEAR_API_KEY env var" do
     previous_linear_api_key = System.get_env("LINEAR_API_KEY")
     env_api_key = "test-linear-api-key"
@@ -242,6 +286,34 @@ defmodule SymphonyElixir.CoreTest do
     assert settings.tracker.project_status_field == "Status"
     assert :ok = Config.validate!()
     assert SymphonyElixir.Tracker.adapter() == SymphonyElixir.GitHub.Adapter
+  end
+
+  test "github tracker settings fall back to GH_TOKEN when GITHUB_TOKEN is blank" do
+    previous_github_token = System.get_env("GITHUB_TOKEN")
+    previous_gh_token = System.get_env("GH_TOKEN")
+    env_api_key = "test-gh-api-key"
+
+    on_exit(fn ->
+      restore_env("GITHUB_TOKEN", previous_github_token)
+      restore_env("GH_TOKEN", previous_gh_token)
+    end)
+
+    System.put_env("GITHUB_TOKEN", "")
+    System.put_env("GH_TOKEN", env_api_key)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_endpoint: nil,
+      tracker_api_token: nil,
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_number: 1,
+      codex_command: "/bin/sh app-server"
+    )
+
+    assert Config.settings!().tracker.api_key == env_api_key
+    assert :ok = Config.validate!()
   end
 
   test "github tracker validation requires repo and project settings" do

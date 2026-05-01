@@ -135,14 +135,29 @@ defmodule SymphonyElixir.Config do
 
   defp validate_tracker_config(%{kind: "github"} = tracker) do
     cond do
-      not is_binary(tracker.api_key) -> {:error, :missing_github_api_token}
-      not is_binary(tracker.owner) -> {:error, :missing_github_owner}
-      not is_binary(tracker.repo) -> {:error, :missing_github_repo}
-      not is_binary(tracker.project_owner) -> {:error, :missing_github_project_owner}
-      tracker.project_owner_type not in ["user", "organization", "org"] -> {:error, {:unsupported_github_project_owner_type, tracker.project_owner_type}}
-      not is_integer(tracker.project_number) -> {:error, :missing_github_project_number}
-      not is_binary(tracker.project_status_field) -> {:error, :missing_github_project_status_field}
-      true -> :ok
+      not is_binary(tracker.api_key) ->
+        {:error, :missing_github_api_token}
+
+      not is_binary(tracker.owner) ->
+        {:error, :missing_github_owner}
+
+      not is_binary(tracker.repo) ->
+        {:error, :missing_github_repo}
+
+      not is_binary(tracker.project_owner) ->
+        {:error, :missing_github_project_owner}
+
+      tracker.project_owner_type not in ["user", "organization", "org"] ->
+        {:error, {:unsupported_github_project_owner_type, tracker.project_owner_type}}
+
+      not is_integer(tracker.project_number) ->
+        {:error, :missing_github_project_number}
+
+      not is_binary(tracker.project_status_field) ->
+        {:error, :missing_github_project_status_field}
+
+      true ->
+        :ok
     end
   end
 

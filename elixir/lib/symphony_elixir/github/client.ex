@@ -408,24 +408,33 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   @doc false
-  @spec resolve_status_update_for_test(String.t(), String.t(), (String.t(), map() -> {:ok, map()} | {:error, term()})) ::
-          {:ok, map()} | {:error, term()}
+  @spec resolve_status_update_for_test(
+          String.t(),
+          String.t(),
+          (String.t(), map() -> {:ok, map()} | {:error, term()})
+        ) :: {:ok, map()} | {:error, term()}
   def resolve_status_update_for_test(issue_id, state_name, graphql_fun)
       when is_binary(issue_id) and is_binary(state_name) and is_function(graphql_fun, 2) do
     resolve_status_update(issue_id, state_name, graphql_fun)
   end
 
   @doc false
-  @spec create_comment_for_test(String.t(), String.t(), (atom(), String.t(), list(), map() | nil, keyword() ->
-                                                           {:ok, map()} | {:error, term()})) :: :ok | {:error, term()}
+  @spec create_comment_for_test(
+          String.t(),
+          String.t(),
+          (atom(), String.t(), list(), map() | nil, keyword() -> {:ok, map()} | {:error, term()})
+        ) :: :ok | {:error, term()}
   def create_comment_for_test(issue_id, body, request_fun)
       when is_binary(issue_id) and is_binary(body) and is_function(request_fun, 5) do
     create_comment(issue_id, body, request_fun)
   end
 
   @doc false
-  @spec patch_issue_state_for_test(String.t(), String.t(), (atom(), String.t(), list(), map() | nil, keyword() ->
-                                                              {:ok, map()} | {:error, term()})) :: :ok | {:error, term()}
+  @spec patch_issue_state_for_test(
+          String.t(),
+          String.t(),
+          (atom(), String.t(), list(), map() | nil, keyword() -> {:ok, map()} | {:error, term()})
+        ) :: :ok | {:error, term()}
   def patch_issue_state_for_test(issue_id, state_name, request_fun)
       when is_binary(issue_id) and is_binary(state_name) and is_function(request_fun, 5) do
     patch_issue_state(issue_id, state_name, request_fun)
@@ -619,11 +628,15 @@ defmodule SymphonyElixir.GitHub.Client do
       :ok
     else
       {:ok, response} ->
-        {:error, {:github_comment_create_status, response_status(response), summarize_error_body(response_body(response))}}
+        {:error, github_comment_create_status(response)}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp github_comment_create_status(response) do
+    {:github_comment_create_status, response_status(response), summarize_error_body(response_body(response))}
   end
 
   defp patch_issue_state(issue_id, state_name, request_fun) when is_function(request_fun, 5) do

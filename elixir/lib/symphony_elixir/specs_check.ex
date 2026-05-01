@@ -33,11 +33,20 @@ defmodule SymphonyElixir.SpecsCheck do
         [path]
 
       File.dir?(path) ->
-        Path.wildcard(Path.join(path, "**/*.ex"))
+        path
+        |> wildcard_root()
+        |> Path.join("**/*.ex")
+        |> Path.wildcard()
 
       true ->
         []
     end
+  end
+
+  defp wildcard_root(path) when is_binary(path) do
+    path
+    |> Path.expand()
+    |> String.replace("\\", "/")
   end
 
   defp file_findings(file, exemptions) do

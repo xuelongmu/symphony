@@ -3,9 +3,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   Executes client-side tool calls requested by Codex app-server turns.
   """
 
+  alias SymphonyElixir.{Config, PathSafety}
   alias SymphonyElixir.GitHub.Client, as: GitHubClient
   alias SymphonyElixir.Linear.Client, as: LinearClient
-  alias SymphonyElixir.{Config, PathSafety}
 
   @linear_graphql_tool "linear_graphql"
   @linear_graphql_description """
@@ -396,7 +396,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         :ok
 
       keys ->
-        formatted_keys = keys |> Enum.map(&"`#{&1}`") |> Enum.join(", ")
+        formatted_keys = Enum.map_join(keys, ", ", &"`#{&1}`")
         {:error, {:sync_workpad, "unsupported argument(s): #{formatted_keys}."}}
     end
   end
@@ -408,29 +408,32 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
     case tracker do
       nil ->
-        cond do
-          has_issue_number? and not has_issue_id? ->
-            {:ok, :github}
-
-          has_issue_id? and not has_issue_number? ->
-            {:ok, :linear}
-
-          has_issue_number? and has_issue_id? ->
-            {:error, {:sync_workpad, "cannot infer tracker when both `issue_number` and `issue_id` are provided; set `tracker` to `github` or `linear`."}}
-
-          true ->
-            {:error, {:sync_workpad, "`issue_number` is required for GitHub sync or `issue_id` is required for Linear sync."}}
-        end
+        infer_sync_workpad_tracker_from_ids(has_issue_number?, has_issue_id?)
 
       tracker when is_binary(tracker) ->
-        case tracker |> String.trim() |> String.downcase() do
-          "github" -> {:ok, :github}
-          "linear" -> {:ok, :linear}
-          _ -> {:error, {:sync_workpad, "`tracker` must be either `github` or `linear`."}}
-        end
+        infer_sync_workpad_tracker_from_name(tracker)
 
       _ ->
         {:error, {:sync_workpad, "`tracker` must be either `github` or `linear`."}}
+    end
+  end
+
+  defp infer_sync_workpad_tracker_from_ids(true, false), do: {:ok, :github}
+  defp infer_sync_workpad_tracker_from_ids(false, true), do: {:ok, :linear}
+
+  defp infer_sync_workpad_tracker_from_ids(true, true) do
+    {:error, {:sync_workpad, "cannot infer tracker when both `issue_number` and `issue_id` are provided; set `tracker` to `github` or `linear`."}}
+  end
+
+  defp infer_sync_workpad_tracker_from_ids(false, false) do
+    {:error, {:sync_workpad, "`issue_number` is required for GitHub sync or `issue_id` is required for Linear sync."}}
+  end
+
+  defp infer_sync_workpad_tracker_from_name(tracker) do
+    case tracker |> String.trim() |> String.downcase() do
+      "github" -> {:ok, :github}
+      "linear" -> {:ok, :linear}
+      _ -> {:error, {:sync_workpad, "`tracker` must be either `github` or `linear`."}}
     end
   end
 
@@ -648,13 +651,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp configured_github_value(field) do
-    try do
-      Config.settings!().tracker
-      |> Map.get(field)
-      |> present_string_or_nil()
-    rescue
-      _ -> nil
-    end
+    Config.settings!().tracker
+    |> Map.get(field)
+    |> present_string_or_nil()
+  rescue
+    _ -> nil
   end
 
   defp present_string?(value), do: is_binary(value) and String.trim(value) != ""

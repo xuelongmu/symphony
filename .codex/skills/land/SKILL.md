@@ -12,7 +12,8 @@ description:
 
 - Ensure the PR is conflict-free with main.
 - Keep CI green and fix failures when they occur.
-- Squash-merge the PR once checks pass.
+- Squash-merge the PR only after checks pass and the 10-minute post-green
+  feedback wait completes with no outstanding feedback.
 - Do not yield to the user until the PR is merged; keep the watcher loop running
   unless blocked.
 - No need to delete remote branches after merge; the repo auto-deletes head
@@ -34,11 +35,13 @@ description:
    resolve conflicts, then use the `push` skill to publish the updated branch.
 6. Ensure Codex review comments (if present) are acknowledged and any required
    fixes are handled before merging.
-7. Watch checks until complete.
+7. Watch checks until complete, then continue watching PR feedback for 10
+   minutes before merging.
 8. If checks fail, pull logs, fix the issue, commit with the `commit` skill,
    push with the `push` skill, and re-run checks.
-9. When all checks are green and review feedback is addressed, squash-merge and
-   delete the branch using the PR title/body for the merge subject/body.
+9. When all checks are green, review feedback is addressed, and the 10-minute
+   post-green feedback wait has completed, squash-merge and delete the branch
+   using the PR title/body for the merge subject/body.
 10. **Context guard:** Before implementing review feedback, confirm it does not
     conflict with the user’s stated intent or task context. If it conflicts,
     respond inline with a justification and ask the user before changing code.
@@ -72,25 +75,14 @@ if [ "$mergeable" = "CONFLICTING" ]; then
   # Then run the `push` skill to publish the updated branch.
 fi
 
-# Preferred: use the Async Watch Helper below. The manual loop is a fallback
-# when Python cannot run or the helper script is unavailable.
-# Wait for review feedback: Codex reviews arrive as issue comments that start
-# with "## Codex Review — <persona>". Treat them like reviewer feedback: reply
-# with a `[codex]` issue comment acknowledging the findings and whether you're
-# addressing or deferring them.
-while true; do
-  gh api repos/{owner}/{repo}/issues/"$pr_number"/comments \
-    --jq '.[] | select(.body | startswith("## Codex Review")) | .id' | rg -q '.' \
-    && break
-  sleep 10
-done
-
-# Watch checks
-if ! gh pr checks --watch; then
-  gh pr checks
-  # Identify failing run and inspect logs
-  # gh run list --branch "$branch"
-  # gh run view <run-id> --log
+# Preferred: use the Async Watch Helper below. It watches review feedback,
+# checks, and PR head changes in parallel. After checks pass, it keeps polling
+# feedback for 10 minutes. A Codex review is not required to arrive; no
+# actionable feedback during the 10-minute wait is enough to proceed.
+if ! python3 .codex/skills/land/land_watch.py; then
+  # Exit code 2 means review feedback must be handled.
+  # Exit code 3 means checks failed or never appeared.
+  # Exit code 4 means the PR head changed and local state must be refreshed.
   exit 1
 fi
 
@@ -109,9 +101,14 @@ python3 .codex/skills/land/land_watch.py
 
 Exit codes:
 
-- 2: Review comments detected (address feedback)
+- 2: Review comments detected before merge (address feedback)
 - 3: CI checks failed
 - 4: PR head updated (autofix commit detected)
+
+The helper returns success only after the PR is conflict-free, checks are green,
+and 10 minutes pass after green checks with no outstanding feedback. It does not
+require a Codex review to arrive; absence of feedback after the grace period is
+acceptable.
 
 ## Failure Handling
 
@@ -128,9 +125,9 @@ Exit codes:
   remediation is to fetch latest `origin/main`, merge, force-push, and rerun CI.
 - If mergeability is `UNKNOWN`, wait and re-check.
 - Do not merge while review comments (human or Codex review) are outstanding.
-- Codex review jobs retry on failure and are non-blocking; use the presence of
-  `## Codex Review — <persona>` issue comments (not job status) as the signal
-  that review feedback is available.
+- Codex review jobs retry on failure and are non-blocking; merge is gated by
+  outstanding feedback plus the 10-minute post-green feedback wait, not by a
+  requirement that a Codex review comment must arrive.
 - Do not enable auto-merge; this repo has no required checks so auto-merge can
   skip tests.
 - If the remote PR branch advanced due to your own prior force-push or merge,

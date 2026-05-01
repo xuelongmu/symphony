@@ -45,6 +45,21 @@ defmodule SymphonyElixir.CoreTest do
     assert message =~ "tracker.active_states"
 
     write_workflow_file!(Workflow.workflow_file_path(),
+      review_enabled: true,
+      review_state: "Agent Review"
+    )
+
+    assert {:error, {:review_state_not_active, "Agent Review"}} = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      review_enabled: true,
+      review_state: "Agent Review",
+      tracker_active_states: ["Todo", "In Progress", "Agent Review"]
+    )
+
+    assert :ok = Config.validate!()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: "token",
       tracker_project_slug: nil
     )

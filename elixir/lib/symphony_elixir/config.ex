@@ -116,8 +116,9 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_semantics(settings) do
-    with :ok <- validate_tracker_kind(settings.tracker.kind) do
-      validate_tracker_config(settings.tracker)
+    with :ok <- validate_tracker_kind(settings.tracker.kind),
+         :ok <- validate_tracker_config(settings.tracker) do
+      validate_review_config(settings.review, settings.tracker)
     end
   end
 
@@ -163,6 +164,19 @@ defmodule SymphonyElixir.Config do
 
   defp validate_tracker_config(_tracker), do: :ok
 
+  defp validate_review_config(%{enabled: true, state: state}, %{active_states: active_states})
+       when is_binary(state) and is_list(active_states) do
+    review_state = Schema.normalize_issue_state(state)
+
+    if Enum.any?(active_states, &(Schema.normalize_issue_state(&1) == review_state)) do
+      :ok
+    else
+      {:error, {:review_state_not_active, state}}
+    end
+  end
+
+  defp validate_review_config(_review, _tracker), do: :ok
+
   defp format_config_error(reason) do
     case reason do
       {:invalid_workflow_config, message} ->
@@ -176,6 +190,9 @@ defmodule SymphonyElixir.Config do
 
       :workflow_front_matter_not_a_map ->
         "Failed to parse WORKFLOW.md: workflow front matter must decode to a map"
+
+      {:review_state_not_active, state} ->
+        "Invalid WORKFLOW.md config: review.state #{inspect(state)} must be included in tracker.active_states when review.enabled is true"
 
       other ->
         "Invalid WORKFLOW.md config: #{inspect(other)}"

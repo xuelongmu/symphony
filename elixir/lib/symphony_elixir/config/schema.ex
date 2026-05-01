@@ -44,6 +44,28 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
 
+    defmodule Github do
+      @moduledoc false
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @primary_key false
+
+      embedded_schema do
+        field(:owner, :string)
+        field(:repo, :string)
+        field(:project_number, :integer)
+        field(:status_field, :string, default: "Status")
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        schema
+        |> cast(attrs, [:owner, :repo, :project_number, :status_field], empty_values: [])
+        |> validate_number(:project_number, greater_than: 0)
+      end
+    end
+
     embedded_schema do
       field(:kind, :string)
       field(:endpoint, :string, default: "https://api.linear.app/graphql")
@@ -58,6 +80,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
+      embeds_one(:github, Github, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -83,6 +106,7 @@ defmodule SymphonyElixir.Config.Schema do
         empty_values: []
       )
       |> validate_number(:project_number, greater_than: 0)
+      |> cast_embed(:github, with: &Github.changeset/2)
     end
   end
 
@@ -220,6 +244,31 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Review do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:enabled, :boolean, default: false)
+      field(:state, :string, default: "Agent Review")
+      field(:max_rounds, :integer, default: 3)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:enabled, :state, :max_rounds], empty_values: [])
+      |> validate_required([:state])
+      |> validate_max_rounds()
+    end
+
+    defp validate_max_rounds(changeset) do
+      validate_number(changeset, :max_rounds, greater_than: 0)
+    end
+  end
+
   defmodule Hooks do
     @moduledoc false
     use Ecto.Schema
@@ -288,6 +337,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:review, Review, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
@@ -299,6 +349,7 @@ defmodule SymphonyElixir.Config.Schema do
     config
     |> normalize_keys()
     |> drop_nil_values()
+    |> merge_nested_github_tracker_attrs()
     |> changeset()
     |> apply_action(:validate)
     |> case do
@@ -380,19 +431,49 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
+    |> cast_embed(:review, with: &Review.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
   end
 
+  defp merge_nested_github_tracker_attrs(%{"tracker" => %{} = tracker_attrs} = config) do
+    github_attrs = Map.get(tracker_attrs, "github") || %{}
+
+    tracker_attrs =
+      tracker_attrs
+      |> put_missing_tracker_attr("owner", Map.get(github_attrs, "owner"))
+      |> put_missing_tracker_attr("repo", Map.get(github_attrs, "repo"))
+      |> put_missing_tracker_attr("project_owner", Map.get(github_attrs, "owner"))
+      |> put_missing_tracker_attr("project_number", Map.get(github_attrs, "project_number"))
+      |> put_missing_tracker_attr("project_status_field", Map.get(github_attrs, "status_field"))
+
+    Map.put(config, "tracker", tracker_attrs)
+  end
+
+  defp merge_nested_github_tracker_attrs(config), do: config
+
+  defp put_missing_tracker_attr(attrs, key, value) do
+    cond do
+      Map.has_key?(attrs, key) -> attrs
+      is_nil(value) -> attrs
+      true -> Map.put(attrs, key, value)
+    end
+  end
+
   defp finalize_settings(settings) do
-    tracker = %{
+    tracker =
       settings.tracker
-      | endpoint: default_tracker_endpoint(settings.tracker.kind, settings.tracker.endpoint),
-        api_key: resolve_secret_setting(settings.tracker.api_key, default_tracker_api_key(settings.tracker.kind)),
-        assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
-    }
+      |> merge_nested_github_tracker_fields()
+      |> then(fn tracker ->
+        %{
+          tracker
+          | endpoint: default_tracker_endpoint(tracker.kind, tracker.endpoint),
+            api_key: resolve_secret_setting(tracker.api_key, tracker_api_key_fallback(tracker.kind)),
+            assignee: resolve_secret_setting(tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
+        }
+      end)
 
     workspace = %{
       settings.workspace
@@ -406,6 +487,32 @@ defmodule SymphonyElixir.Config.Schema do
     }
 
     %{settings | tracker: tracker, workspace: workspace, codex: codex}
+  end
+
+  defp tracker_api_key_fallback("github"), do: first_present_env(["GITHUB_TOKEN", "GH_TOKEN"])
+
+  defp tracker_api_key_fallback(_kind), do: System.get_env("LINEAR_API_KEY")
+
+  defp first_present_env(names) when is_list(names) do
+    Enum.find_value(names, fn name ->
+      case normalize_secret_value(System.get_env(name)) do
+        nil -> false
+        value -> value
+      end
+    end)
+  end
+
+  defp merge_nested_github_tracker_fields(%Tracker{} = tracker) do
+    github = tracker.github || %Tracker.Github{}
+
+    %{
+      tracker
+      | owner: tracker.owner || github.owner,
+        repo: tracker.repo || github.repo,
+        project_owner: tracker.project_owner || github.owner,
+        project_number: tracker.project_number || github.project_number,
+        project_status_field: tracker.project_status_field
+    }
   end
 
   defp normalize_keys(value) when is_map(value) do
@@ -502,9 +609,6 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp normalize_secret_value(_value), do: nil
-
-  defp default_tracker_api_key("github"), do: System.get_env("GITHUB_TOKEN")
-  defp default_tracker_api_key(_kind), do: System.get_env("LINEAR_API_KEY")
 
   defp default_tracker_endpoint("github", endpoint)
        when endpoint in [nil, "", "https://api.linear.app/graphql"],

@@ -14,6 +14,7 @@ defmodule SymphonyElixir.Orchestrator do
   @failure_retry_base_ms 10_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
+  @human_review_state "Human Review"
   @empty_codex_totals %{
     input_tokens: 0,
     output_tokens: 0,
@@ -26,6 +27,8 @@ defmodule SymphonyElixir.Orchestrator do
     Runtime state for the orchestrator polling loop.
     """
 
+    @type t :: %__MODULE__{}
+
     defstruct [
       :poll_interval_ms,
       :max_concurrent_agents,
@@ -37,6 +40,7 @@ defmodule SymphonyElixir.Orchestrator do
       completed: MapSet.new(),
       claimed: MapSet.new(),
       retry_attempts: %{},
+      review_rounds: %{},
       codex_totals: nil,
       codex_rate_limits: nil
     ]
@@ -333,6 +337,18 @@ defmodule SymphonyElixir.Orchestrator do
     select_worker_host(state, preferred_worker_host)
   end
 
+  @doc false
+  @spec agent_role_for_issue_for_test(Issue.t()) :: :implementation | :review
+  def agent_role_for_issue_for_test(%Issue{} = issue) do
+    agent_role_for_issue(issue)
+  end
+
+  @doc false
+  @spec dispatch_issue_for_test(State.t(), Issue.t()) :: State.t()
+  def dispatch_issue_for_test(%State{} = state, %Issue{} = issue) do
+    dispatch_issue(state, issue)
+  end
+
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
 
   defp reconcile_running_issue_states([issue | rest], state, active_states, terminal_states) do
@@ -345,6 +361,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp reconcile_issue_state(%Issue{} = issue, state, active_states, terminal_states) do
+    state = clear_review_round_unless_review_state(state, issue)
+
     cond do
       terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Issue moved to terminal state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
@@ -354,6 +372,10 @@ defmodule SymphonyElixir.Orchestrator do
       !issue_routable_to_worker?(issue) ->
         Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; stopping active agent")
 
+        terminate_running_issue(state, issue.id, false)
+
+      active_issue_state?(issue.state, active_states) and issue_blocked_by_non_terminal?(issue, terminal_states) ->
+        Logger.info("Issue became blocked during running-state refresh: #{issue_context(issue)} blocked_by=#{length(issue.blocked_by)}; stopping active agent")
         terminate_running_issue(state, issue.id, false)
 
       active_issue_state?(issue.state, active_states) ->
@@ -383,7 +405,10 @@ defmodule SymphonyElixir.Orchestrator do
         state_acc
       else
         log_missing_running_issue(state_acc, issue_id)
-        terminate_running_issue(state_acc, issue_id, false)
+
+        state_acc
+        |> clear_review_round(issue_id)
+        |> terminate_running_issue(issue_id, false)
       end
     end)
   end
@@ -558,7 +583,7 @@ defmodule SymphonyElixir.Orchestrator do
          terminal_states
        ) do
     candidate_issue?(issue, active_states, terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
+      !issue_blocked_by_non_terminal?(issue, terminal_states) and
       !MapSet.member?(claimed, issue.id) and
       !Map.has_key?(running, issue.id) and
       available_slots(state) > 0 and
@@ -612,22 +637,18 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp issue_routable_to_worker?(_issue), do: true
 
-  defp todo_issue_blocked_by_non_terminal?(
-         %Issue{state: issue_state, blocked_by: blockers},
-         terminal_states
-       )
-       when is_binary(issue_state) and is_list(blockers) do
-    normalize_issue_state(issue_state) == "todo" and
-      Enum.any?(blockers, fn
-        %{state: blocker_state} when is_binary(blocker_state) ->
-          !terminal_issue_state?(blocker_state, terminal_states)
+  defp issue_blocked_by_non_terminal?(%Issue{blocked_by: blockers}, terminal_states)
+       when is_list(blockers) do
+    Enum.any?(blockers, fn
+      %{state: blocker_state} when is_binary(blocker_state) ->
+        !terminal_issue_state?(blocker_state, terminal_states)
 
-        _ ->
-          true
-      end)
+      _ ->
+        true
+    end)
   end
 
-  defp todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+  defp issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
@@ -660,7 +681,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
     case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
       {:ok, %Issue{} = refreshed_issue} ->
-        do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
+        maybe_dispatch_or_handoff_review_limit(state, refreshed_issue, attempt, preferred_worker_host)
 
       {:skip, :missing} ->
         Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
@@ -674,6 +695,45 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
         state
+    end
+  end
+
+  defp maybe_dispatch_or_handoff_review_limit(%State{} = state, %Issue{} = issue, attempt, preferred_worker_host) do
+    if review_round_limit_reached?(state, issue) do
+      handoff_review_limit(state, issue, attempt)
+    else
+      do_dispatch_issue(state, issue, attempt, preferred_worker_host)
+    end
+  end
+
+  defp review_round_limit_reached?(%State{review_rounds: review_rounds}, %Issue{id: issue_id} = issue)
+       when is_binary(issue_id) do
+    config = Config.settings!()
+
+    agent_role_for_issue(issue) == :review and
+      Map.get(review_rounds || %{}, issue_id, 0) >= config.review.max_rounds
+  end
+
+  defp review_round_limit_reached?(_state, _issue), do: false
+
+  defp handoff_review_limit(%State{} = state, %Issue{} = issue, attempt) do
+    max_rounds = Config.settings!().review.max_rounds
+
+    Logger.info("Automated review max rounds reached for #{issue_context(issue)} rounds=#{max_rounds}; moving to #{@human_review_state}")
+
+    case Tracker.update_issue_state(issue.id, @human_review_state) do
+      :ok ->
+        state
+        |> clear_review_round(issue.id)
+        |> release_issue_claim(issue.id)
+
+      {:error, reason} ->
+        Logger.warning("Failed to move #{issue_context(issue)} to #{@human_review_state} after review max rounds: #{inspect(reason)}")
+
+        schedule_issue_retry(state, issue.id, next_handoff_retry_attempt(attempt), %{
+          identifier: issue.identifier,
+          error: "review max-round handoff failed: #{inspect(reason)}"
+        })
     end
   end
 
@@ -691,13 +751,21 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
+    agent_role = agent_role_for_issue(issue)
+
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+           AgentRunner.run(issue, recipient,
+             attempt: attempt,
+             worker_host: worker_host,
+             agent_role: agent_role
+           )
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
 
-        Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
+        Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} agent_role=#{agent_role}")
+
+        state = record_review_round(state, issue, agent_role)
 
         running =
           Map.put(state.running, issue.id, %{
@@ -705,6 +773,7 @@ defmodule SymphonyElixir.Orchestrator do
             ref: ref,
             identifier: issue.identifier,
             issue: issue,
+            agent_role: agent_role,
             worker_host: worker_host,
             workspace_path: nil,
             session_id: nil,
@@ -739,6 +808,44 @@ defmodule SymphonyElixir.Orchestrator do
           error: "failed to spawn agent: #{inspect(reason)}",
           worker_host: worker_host
         })
+    end
+  end
+
+  defp record_review_round(%State{review_rounds: review_rounds} = state, %Issue{id: issue_id}, :review)
+       when is_binary(issue_id) do
+    %{state | review_rounds: Map.update(review_rounds || %{}, issue_id, 1, &(&1 + 1))}
+  end
+
+  defp record_review_round(%State{} = state, _issue, _agent_role), do: state
+
+  defp clear_review_round(%State{review_rounds: review_rounds} = state, issue_id) when is_binary(issue_id) do
+    %{state | review_rounds: Map.delete(review_rounds || %{}, issue_id)}
+  end
+
+  defp clear_review_round(%State{} = state, _issue_id), do: state
+
+  defp clear_review_round_unless_review_state(%State{} = state, %Issue{id: issue_id} = issue)
+       when is_binary(issue_id) do
+    if agent_role_for_issue(issue) == :review do
+      state
+    else
+      clear_review_round(state, issue_id)
+    end
+  end
+
+  defp clear_review_round_unless_review_state(%State{} = state, _issue), do: state
+
+  defp next_handoff_retry_attempt(attempt) when is_integer(attempt) and attempt > 0, do: attempt + 1
+  defp next_handoff_retry_attempt(_attempt), do: 1
+
+  defp agent_role_for_issue(%Issue{state: state_name}) do
+    config = Config.settings!()
+
+    if config.review.enabled and
+         normalize_issue_state(state_name) == normalize_issue_state(config.review.state) do
+      :review
+    else
+      :implementation
     end
   end
 
@@ -848,6 +955,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_retry_issue_lookup(%Issue{} = issue, state, issue_id, attempt, metadata) do
     terminal_states = terminal_state_set()
+    state = clear_review_round_unless_review_state(state, issue)
 
     cond do
       terminal_issue_state?(issue.state, terminal_states) ->
@@ -868,7 +976,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_retry_issue_lookup(nil, state, issue_id, _attempt, _metadata) do
     Logger.debug("Issue no longer visible, removing claim issue_id=#{issue_id}")
-    {:noreply, release_issue_claim(state, issue_id)}
+    {:noreply, state |> clear_review_round(issue_id) |> release_issue_claim(issue_id)}
   end
 
   defp cleanup_issue_workspace(identifier, worker_host \\ nil)
@@ -1110,6 +1218,7 @@ defmodule SymphonyElixir.Orchestrator do
           issue_id: issue_id,
           identifier: metadata.identifier,
           state: metadata.issue.state,
+          agent_role: Map.get(metadata, :agent_role, :implementation),
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
           session_id: metadata.session_id,
@@ -1305,7 +1414,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states)
+      !issue_blocked_by_non_terminal?(issue, terminal_states)
   end
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do

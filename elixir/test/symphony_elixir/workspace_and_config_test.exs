@@ -357,6 +357,136 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert issue.assigned_to_worker
   end
 
+  test "github client normalizes project status and issue dependencies" do
+    raw_item = %{
+      "id" => "project-item-1",
+      "fieldValueByName" => %{"name" => "In Progress"},
+      "content" => %{
+        "__typename" => "Issue",
+        "id" => "issue-47-node",
+        "number" => 47,
+        "title" => "Dependent GitHub issue",
+        "body" => "Needs dependency",
+        "state" => "OPEN",
+        "url" => "https://github.com/animus-intelligence/animus-agent/issues/47",
+        "createdAt" => "2026-01-01T00:00:00Z",
+        "updatedAt" => "2026-01-02T00:00:00Z",
+        "repository" => %{
+          "name" => "animus-agent",
+          "nameWithOwner" => "animus-intelligence/animus-agent",
+          "owner" => %{"login" => "animus-intelligence"}
+        },
+        "assignees" => %{"nodes" => [%{"login" => "agent-runner"}]},
+        "labels" => %{"nodes" => [%{"name" => "Scheduler"}]},
+        "blockedBy" => %{
+          "nodes" => [
+            %{
+              "id" => "issue-14-node",
+              "number" => 14,
+              "title" => "Blocking GitHub issue",
+              "state" => "OPEN",
+              "url" => "https://github.com/animus-intelligence/animus-agent/issues/14",
+              "repository" => %{"nameWithOwner" => "animus-intelligence/animus-agent"}
+            }
+          ]
+        }
+      }
+    }
+
+    issue =
+      SymphonyElixir.GitHub.Client.normalize_project_item_for_test(raw_item, %{
+        owner: "animus-intelligence",
+        repo: "animus-agent"
+      })
+
+    assert issue.id == "47"
+    assert issue.identifier == "github-animus-intelligence-animus-agent-47"
+    assert issue.state == "In Progress"
+    assert issue.labels == ["scheduler"]
+    assert issue.assignee_id == "agent-runner"
+
+    assert issue.blocked_by == [
+             %{
+               id: "issue-14-node",
+               identifier: "github-animus-intelligence-animus-agent-14",
+               title: "Blocking GitHub issue",
+               state: "Open",
+               source: "github",
+               url: "https://github.com/animus-intelligence/animus-agent/issues/14"
+             }
+           ]
+  end
+
+  test "github client fetches project issues by configured status field" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: "github-token",
+      tracker_project_slug: nil,
+      tracker_github_owner: "animus-intelligence",
+      tracker_github_repo: "animus-agent",
+      tracker_github_project_number: 9,
+      tracker_github_status_field: "Status",
+      tracker_project_owner: "animus-intelligence",
+      tracker_project_owner_type: "organization"
+    )
+
+    graphql_fun = fn query, variables ->
+      send(self(), {:github_project_query, query, variables})
+
+      {:ok,
+       %{
+         "data" => %{
+           "organization" => %{
+             "projectV2" => %{
+               "id" => "project-1",
+               "items" => %{
+                 "nodes" => [
+                   %{
+                     "id" => "project-item-1",
+                     "fieldValueByName" => %{"name" => "Agent Review"},
+                     "content" => %{
+                       "__typename" => "Issue",
+                       "id" => "issue-1-node",
+                       "number" => 1,
+                       "title" => "Review me",
+                       "body" => "Ready for review",
+                       "state" => "OPEN",
+                       "url" => "https://github.com/animus-intelligence/animus-agent/issues/1",
+                       "repository" => %{
+                         "name" => "animus-agent",
+                         "nameWithOwner" => "animus-intelligence/animus-agent",
+                         "owner" => %{"login" => "animus-intelligence"}
+                       },
+                       "assignees" => %{"nodes" => []},
+                       "labels" => %{"nodes" => []},
+                       "blockedBy" => %{
+                         "nodes" => [],
+                         "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+                       }
+                     }
+                   }
+                 ],
+                 "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+               }
+             }
+           },
+           "user" => nil
+         }
+       }}
+    end
+
+    assert {:ok, [issue]} =
+             SymphonyElixir.GitHub.Client.fetch_issues_by_states_for_test(["Agent Review"], graphql_fun)
+
+    assert issue.id == "1"
+    assert issue.state == "Agent Review"
+    assert_receive {:github_project_query, query, variables}
+    assert query =~ "fieldValueByName"
+    assert variables.statusFieldName == "Status"
+    assert variables.number == 9
+    assert variables.blockedByFirst == 50
+  end
+
   test "linear client marks explicitly unassigned issues as not routed to worker" do
     raw_issue = %{
       "id" => "issue-99",
@@ -498,7 +628,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Enum.map(sorted, & &1.identifier) == ["MT-200", "MT-201", "MT-199"]
   end
 
-  test "todo issue with non-terminal blocker is not dispatch-eligible" do
+  test "active issue with non-terminal blocker is not dispatch-eligible" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
@@ -511,7 +641,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       id: "blocked-1",
       identifier: "MT-1001",
       title: "Blocked work",
-      state: "Todo",
+      state: "In Progress",
       blocked_by: [%{id: "blocker-1", identifier: "MT-1002", state: "In Progress"}]
     }
 
@@ -540,7 +670,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
-  test "todo issue with terminal blockers remains dispatch-eligible" do
+  test "active issue with terminal blockers remains dispatch-eligible" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
@@ -553,19 +683,19 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       id: "ready-1",
       identifier: "MT-1003",
       title: "Ready work",
-      state: "Todo",
+      state: "In Progress",
       blocked_by: [%{id: "blocker-2", identifier: "MT-1004", state: "Closed"}]
     }
 
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
-  test "dispatch revalidation skips stale todo issue once a non-terminal blocker appears" do
+  test "dispatch revalidation skips stale active issue once a non-terminal blocker appears" do
     stale_issue = %Issue{
       id: "blocked-2",
       identifier: "MT-1005",
       title: "Stale blocked work",
-      state: "Todo",
+      state: "In Progress",
       blocked_by: []
     }
 
@@ -573,7 +703,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       id: "blocked-2",
       identifier: "MT-1005",
       title: "Stale blocked work",
-      state: "Todo",
+      state: "In Progress",
       blocked_by: [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
     }
 

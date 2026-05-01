@@ -426,7 +426,9 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       DynamicTool.execute(
         "github_graphql",
         %{"query" => "query Viewer { viewer { login } }"},
-        github_client: fn _query, _variables, _opts -> {:error, {:github_graphql_request, :missing_github_api_token}} end
+        github_client: fn _query, _variables, _opts ->
+          {:error, {:github_graphql_request, :missing_github_api_token}}
+        end
       )
 
     assert Jason.decode!(wrapped_missing_token["output"]) == %{

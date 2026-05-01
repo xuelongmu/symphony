@@ -5,6 +5,7 @@ tracker:
   active_states:
     - Todo
     - In Progress
+    - Agent Review
     - Merging
     - Rework
   terminal_states:
@@ -28,6 +29,10 @@ hooks:
 agent:
   max_concurrent_agents: 10
   max_turns: 20
+review:
+  enabled: true
+  state: Agent Review
+  max_rounds: 3
 codex:
   command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
   approval_policy: never
@@ -36,7 +41,7 @@ codex:
     type: workspaceWrite
 ---
 
-You are working on a Linear ticket `{{ issue.identifier }}`
+You are working on a tracker ticket `{{ issue.identifier }}`
 
 {% if attempt %}
 Continuation context:
@@ -51,6 +56,7 @@ Issue context:
 Identifier: {{ issue.identifier }}
 Title: {{ issue.title }}
 Current status: {{ issue.state }}
+Agent role: {{ agent.role }}
 Labels: {{ issue.labels }}
 URL: {{ issue.url }}
 
@@ -69,9 +75,9 @@ Instructions:
 
 Work only in the provided repository copy. Do not touch any other path.
 
-## Prerequisite: Linear MCP or `linear_graphql` tool is available
+## Prerequisite: tracker tools are available
 
-The agent should be able to talk to Linear, either via a configured Linear MCP server or injected `linear_graphql` tool. If none are present, stop and ask the user to configure Linear.
+The agent should be able to talk to the configured tracker. For Linear, use a configured Linear MCP server or injected `linear_graphql` tool. For GitHub-backed issues, use `gh` plus GitHub API calls where workflow requires them. If no tracker path is available, stop and ask the user to configure tracker access.
 
 ## Default posture
 
@@ -80,11 +86,11 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
 - Keep ticket metadata current (state, checklist, acceptance criteria, links).
-- Treat a single persistent Linear comment as the source of truth for progress.
+- Treat a single persistent tracker comment as the source of truth for progress.
 - Use that single workpad comment for all progress and handoff notes; do not post separate "done"/summary comments.
 - Treat any ticket-authored `Validation`, `Test Plan`, or `Testing` section as non-negotiable acceptance input: mirror it in the workpad and execute it before considering the work complete.
 - When meaningful out-of-scope improvements are discovered during execution,
-  file a separate Linear issue instead of expanding scope. The follow-up issue
+  file a separate tracker issue instead of expanding scope. The follow-up issue
   must include a clear title, description, and acceptance criteria, be placed in
   `Backlog`, be assigned to the same project as the current issue, link the
   current issue as `related`, and use `blockedBy` when the follow-up depends on
@@ -105,8 +111,9 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 
 - `Backlog` -> out of scope for this workflow; do not modify.
 - `Todo` -> queued; immediately transition to `In Progress` before active work.
-  - Special case: if a PR is already attached, treat as feedback/rework loop (run full PR feedback sweep, address or explicitly push back, revalidate, return to `Human Review`).
+  - Special case: if a PR is already attached, treat as feedback/rework loop (run full PR feedback sweep, address or explicitly push back, revalidate, return to `Agent Review` when automated review is enabled; otherwise return to `Human Review`).
 - `In Progress` -> implementation actively underway.
+- `Agent Review` -> automated read-only review agent inspects the PR and either sends clean work to `Human Review` or sends blocking findings back to `In Progress`.
 - `Human Review` -> PR is attached and validated; waiting on human approval.
 - `Merging` -> approved by human; execute the `land` skill flow (do not call `gh pr merge` directly).
 - `Rework` -> reviewer requested changes; planning + implementation required.
@@ -121,6 +128,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
    - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
+   - `Agent Review` -> run automated review flow.
    - `Human Review` -> wait and poll for decision/review updates.
    - `Merging` -> on entry, open and follow `.codex/skills/land/SKILL.md`; do not call `gh pr merge` directly.
    - `Rework` -> run rework flow.
@@ -151,7 +159,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
     - Format: `<host>:<abs-workdir>@<short-sha>`
     - Example: `devbox-01:/home/dev-user/code/symphony-workspaces/MT-32@7bdde33bc`
-    - Do not include metadata already inferable from Linear issue fields (`issue ID`, `status`, `branch`, `PR link`).
+    - Do not include metadata already inferable from tracker issue fields (`issue ID`, `status`, `branch`, `PR link`).
 6.  Add explicit acceptance criteria and TODOs in checklist form in the same comment.
     - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
@@ -167,19 +175,29 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 
 ## PR feedback sweep protocol (required)
 
-When a ticket has an attached PR, run this protocol before moving to `Human Review`:
+When a ticket has an attached PR, run this deterministic protocol before any transition to `Agent Review` or `Human Review`:
 
 1. Identify the PR number from issue links/attachments.
-2. Gather feedback from all channels:
+2. Fetch every feedback source:
    - Top-level PR comments (`gh pr view --comments`).
    - Inline review comments (`gh api repos/<owner>/<repo>/pulls/<pr>/comments`).
    - Review summaries/states (`gh pr view --json reviews`).
-3. Treat every actionable reviewer comment (human or bot), including inline review comments, as blocking until one of these is true:
-   - code/test/docs updated to address it, or
-   - explicit, justified pushback reply is posted on that thread.
-4. Update the workpad plan/checklist to include each feedback item and its resolution status.
-5. Re-run validation after feedback-driven changes and push updates.
-6. Repeat this sweep until there are no outstanding actionable comments.
+   - Unresolved review threads when GraphQL access is available.
+   - Latest CI/check status.
+   - Bot comments and bot reviews, including review bots and CI bots.
+3. Classify each item in the workpad as exactly one of:
+   - `actionable`: requests a code, test, docs, behavior, reliability, security, or UX change.
+   - `question`: asks for clarification without clearly requesting a change.
+   - `non_actionable`: praise, duplicate feedback, obsolete feedback, generated noise, or already-resolved content.
+   - `blocking_check`: failing required CI/check result.
+4. Resolve every `actionable` item by exactly one of:
+   - code/test/docs update,
+   - explicit PR reply explaining why no change is appropriate,
+   - obsolete marking only when newer commits or newer comments clearly supersede it.
+5. Resolve every `blocking_check` by fixing the failure or documenting unrelated/flaky evidence according to workflow policy.
+6. Record each feedback item, classification, action taken, validation run, and remaining status in the workpad.
+7. After any code/docs/test change, push updates, wait for checks, fetch PR feedback again, and repeat the full sweep.
+8. The sweep is complete only when no actionable PR feedback remains, required checks are green or explicitly workflow-waived, ticket validation is complete, and the workpad reflects the final sweep result.
 
 ## Blocked-access escape hatch (required behavior)
 
@@ -193,7 +211,7 @@ Use this only when completion is blocked by missing required tools or missing au
   - exact human action needed to unblock.
 - Keep the brief concise and action-oriented; do not add extra top-level comments outside the workpad.
 
-## Step 2: Execution phase (Todo -> In Progress -> Human Review)
+## Step 2: Execution phase (Todo -> In Progress -> Agent Review/Human Review)
 
 1.  Determine current repo state (`branch`, `git status`, `HEAD`) and verify the kickoff `pull` sync result is already recorded in the workpad before implementation continues.
 2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave the current state unchanged.
@@ -224,19 +242,36 @@ Use this only when completion is blocked by missing required tools or missing au
     - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
-11. Before moving to `Human Review`, poll PR feedback and checks:
+11. Before moving out of implementation, poll PR feedback and checks:
     - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
     - Run the full PR feedback sweep protocol.
     - Confirm PR checks are passing (green) after the latest changes.
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
     - Repeat this check-address-verify loop until no outstanding comments remain and checks are fully passing.
     - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
-12. Only then move issue to `Human Review`.
+12. Only then move issue to `Agent Review` when automated review is enabled; otherwise move it to `Human Review`.
     - Exception: if blocked by missing required non-GitHub tools/auth per the blocked-access escape hatch, move to `Human Review` with the blocker brief and explicit unblock actions.
 13. For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Ensure branch was pushed with any required updates.
-    - Then move to `Human Review`.
+    - Then move to `Agent Review` when automated review is enabled; otherwise move to `Human Review`.
+
+## Step 2.5: Automated review handling
+
+1. Run this flow only when `Agent role` is `review` and the issue state is `Agent Review`.
+2. Do not edit files, commit, push, merge, or change implementation code. The review agent may run read-only inspection commands and validation commands that only produce local build/cache output.
+3. Identify the attached PR and inspect the latest pushed diff, tests, docs, acceptance criteria, and workpad validation evidence.
+4. Run the PR feedback sweep in read-only mode:
+   - Existing actionable feedback or failing checks are blocking findings.
+   - New review findings must be concrete, reproducible, and tied to changed behavior or missing validation.
+5. Record the review round in the workpad with:
+   - reviewed commit SHA,
+   - commands or checks inspected,
+   - findings grouped as blocking or non-blocking,
+   - recommendation: `clean` or `needs changes`.
+6. If findings are blocking, leave concise PR/workpad feedback and move the issue back to `In Progress`.
+7. If the review is clean, move the issue to `Human Review`.
+8. Stop after `review.max_rounds` automated review rounds. If unresolved findings remain at the limit, move the issue to `Human Review` with the unresolved review notes clearly marked in the workpad.
 
 ## Step 3: Human Review and merge handling
 
@@ -265,9 +300,60 @@ Use this only when completion is blocked by missing required tools or missing au
 - Acceptance criteria and required ticket-provided validation items are complete.
 - Validation/tests are green for the latest commit.
 - PR feedback sweep is complete and no actionable comments remain.
+- Automated review is clean or has reached `review.max_rounds` with unresolved findings explicitly documented.
 - PR checks are green, branch is pushed, and PR is linked on the issue.
 - Required PR metadata is present (`symphony` label).
 - If app-touching, runtime validation/media requirements from `App runtime validation (required)` are complete.
+
+## Required follow-up issue templates
+
+When this workflow introduces GitHub issue dependency API code, create a Backlog follow-up issue with this exact content:
+
+Title: `Replace GitHub dependency API calls with native gh issue dependency commands`
+
+```md
+## Goal
+Replace Symphony's raw GitHub issue dependency API implementation with native `gh issue` commands once GitHub CLI supports blocked-by/blocking flags.
+
+## Context
+Symphony currently uses GitHub API calls because `gh issue` does not expose dependency flags yet. Track upstream:
+https://github.com/cli/cli/issues/11757
+
+## Acceptance Criteria
+- Native `gh issue` commands are used where available.
+- Raw API fallback remains only for older `gh` versions or unsupported operations.
+- Feature detection chooses native commands automatically.
+- Existing GitHub dependency scheduler tests pass unchanged.
+- Docs no longer instruct normal operators to use raw GraphQL.
+```
+
+When this workflow intentionally keeps dependency handling as tracker-native blocker gates instead of a DAG scheduler, create a Backlog follow-up issue with this exact content:
+
+Title: `Evaluate DAG scheduler for dependency-aware dispatch optimization`
+
+```md
+## Goal
+Document and evaluate whether Symphony should add an internal DAG scheduler after v1 tracker-native dependency gates are stable.
+
+## Benefits To Evaluate
+- Detect dependency cycles such as A blocks B and B blocks A.
+- Compute full execution chains instead of relying only on repeated poll eligibility.
+- Prioritize critical-path blockers that unlock many downstream issues.
+- Surface blocked graph health in dashboards.
+- Enable smarter batch planning across large dependency trees.
+- Potentially reduce idle time by reacting immediately when blockers complete.
+
+## Current v1 Behavior
+Symphony uses tracker-native `blocked_by` metadata as a dispatch gate. This preserves the A-before-B guarantee without introducing an internal graph planner.
+
+## Acceptance Criteria
+- Compare DAG scheduling against current tracker-native blocker gating.
+- Identify required data model changes, scheduler changes, and dashboard changes.
+- Define how cycles, cross-project dependencies, and missing blocker states would be handled.
+- Recommend whether to implement, defer, or reject DAG scheduling.
+```
+
+Both follow-ups should be related to the implementation issue. Use `blockedBy` only when the tracker supports linking them to a concrete upstream blocker. Use repo-equivalent `tech-debt` plus `github` for the first issue and `scheduler` for the second issue when those labels exist.
 
 ## Guardrails
 
@@ -283,7 +369,8 @@ Use this only when completion is blocked by missing required tools or missing au
   title/description/acceptance criteria, same-project assignment, a `related`
   link to the current issue, and `blockedBy` when the follow-up depends on the
   current issue.
-- Do not move to `Human Review` unless the `Completion bar before Human Review` is satisfied.
+- Do not move to `Human Review` unless the `Completion bar before Human Review` is satisfied or the automated review max-round handoff rule applies.
+- In `Agent Review`, do not make implementation changes; inspect and route only.
 - In `Human Review`, do not make changes; wait and poll.
 - If state is terminal (`Done`), do nothing and shut down.
 - Keep issue text concise, specific, and reviewer-oriented.

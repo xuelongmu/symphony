@@ -37,7 +37,8 @@ defmodule SymphonyElixir.GitHubClientTest do
                  status: "Todo",
                  state: "OPEN",
                  labels: ["Backend"],
-                 assignees: ["alice"]
+                 assignees: ["alice"],
+                 blocked_by: [%{number: 99, title: "Blocking issue", state: "OPEN"}]
                }),
                project_pull_request_item(%{item_id: "item-pr", number: 2, status: "Todo"}),
                project_issue_item(%{
@@ -89,12 +90,116 @@ defmodule SymphonyElixir.GitHubClientTest do
     assert first_issue.labels == ["backend"]
     assert first_issue.assignee_id == "alice"
     assert first_issue.url == "https://github.com/xuelongmu/symphony/issues/1"
+
+    assert first_issue.blocked_by == [
+             %{
+               id: "blocker-node-99",
+               identifier: "github-xuelongmu-symphony-99",
+               title: "Blocking issue",
+               state: "Open",
+               source: "github",
+               url: "https://github.com/xuelongmu/symphony/issues/99"
+             }
+           ]
+
     assert first_issue.created_at == ~U[2026-01-01 00:00:00Z]
     assert first_issue.updated_at == ~U[2026-01-02 00:00:00Z]
 
-    assert_receive {:project_items_query, query, %{after: nil, first: 50, statusFieldName: "Status"}}
+    assert_receive {:project_items_query, query, %{after: nil, blockedByFirst: 50, first: 50, statusFieldName: "Status"}}
     assert query =~ "SymphonyGitHubProjectItems"
-    assert_receive {:project_items_query, ^query, %{after: "cursor-1", first: 50, statusFieldName: "Status"}}
+    assert_receive {:project_items_query, ^query, %{after: "cursor-1", blockedByFirst: 50, first: 50, statusFieldName: "Status"}}
+  end
+
+  test "fetches all blocker dependency pages before returning candidates" do
+    graphql_fun = fn query, variables ->
+      cond do
+        query =~ "SymphonyGitHubProjectItems" ->
+          send(self(), {:project_items_query, variables})
+
+          {:ok,
+           project_items_response(
+             [
+               project_issue_item(%{
+                 item_id: "item-1",
+                 number: 1,
+                 title: "Blocked issue",
+                 status: "Todo",
+                 state: "OPEN",
+                 blocked_by: [%{number: 100, title: "First blocker", state: "CLOSED"}],
+                 blocked_by_page_info: %{has_next_page: true, end_cursor: "blocker-cursor-1"}
+               })
+             ],
+             has_next_page: false,
+             end_cursor: nil
+           )}
+
+        query =~ "SymphonyGitHubIssueBlockers" ->
+          send(self(), {:issue_blockers_query, variables})
+
+          {:ok,
+           issue_blockers_response(
+             [%{number: 101, title: "Second blocker", state: "OPEN"}],
+             has_next_page: false,
+             end_cursor: nil
+           )}
+      end
+    end
+
+    assert {:ok, [issue]} = GitHubClient.fetch_candidate_issues_for_test(graphql_fun)
+
+    assert Enum.map(issue.blocked_by, & &1.identifier) == [
+             "github-xuelongmu-symphony-100",
+             "github-xuelongmu-symphony-101"
+           ]
+
+    assert Enum.map(issue.blocked_by, & &1.state) == ["Closed", "Open"]
+
+    assert_receive {:project_items_query, %{after: nil, blockedByFirst: 50, first: 50, statusFieldName: "Status"}}
+    assert_receive {:issue_blockers_query, %{after: "blocker-cursor-1", first: 50, issueId: "issue-node-1"}}
+  end
+
+  test "does not hydrate blocker pages for project issues outside the configured repo" do
+    graphql_fun = fn query, variables ->
+      cond do
+        query =~ "SymphonyGitHubProjectItems" ->
+          send(self(), {:project_items_query, variables})
+
+          {:ok,
+           project_items_response(
+             [
+               project_issue_item(%{
+                 item_id: "item-other-repo",
+                 number: 1,
+                 title: "Other repo blocker pages",
+                 status: "Todo",
+                 state: "OPEN",
+                 repo: "elsewhere",
+                 blocked_by_page_info: %{has_next_page: true, end_cursor: "ignored-cursor"}
+               }),
+               project_issue_item(%{
+                 item_id: "item-2",
+                 number: 2,
+                 title: "Tracked repo issue",
+                 status: "Todo",
+                 state: "OPEN"
+               })
+             ],
+             has_next_page: false,
+             end_cursor: nil
+           )}
+
+        query =~ "SymphonyGitHubIssueBlockers" ->
+          flunk("unexpected blocker hydration query: #{inspect(variables)}")
+      end
+    end
+
+    assert {:ok, [issue]} = GitHubClient.fetch_candidate_issues_for_test(graphql_fun)
+
+    assert issue.id == "2"
+    assert issue.identifier == "github-xuelongmu-symphony-2"
+    assert issue.blocked_by == []
+
+    assert_receive {:project_items_query, %{after: nil, blockedByFirst: 50, first: 50, statusFieldName: "Status"}}
   end
 
   test "closed issues are returned as Closed for terminal-state fetch even when project status is stale" do
@@ -213,7 +318,7 @@ defmodule SymphonyElixir.GitHubClientTest do
             }} = GitHubClient.resolve_status_update_for_test("12", "Done", graphql_fun)
 
     assert_receive {:project_fields_query, %{after: nil, first: 50, number: 1, owner: "xuelongmu"}}
-    assert_receive {:project_items_query, %{after: nil, first: 50, number: 1, owner: "xuelongmu"}}
+    assert_receive {:project_items_query, %{after: nil, blockedByFirst: 50, first: 50, number: 1, owner: "xuelongmu"}}
   end
 
   test "returns GitHub-specific errors for missing status options and invalid issue ids" do
@@ -334,10 +439,27 @@ defmodule SymphonyElixir.GitHubClientTest do
     }
   end
 
+  defp issue_blockers_response(blockers, opts) do
+    %{
+      "data" => %{
+        "node" => %{
+          "blockedBy" => %{
+            "nodes" => Enum.map(blockers, &blocker_issue("xuelongmu", "symphony", &1)),
+            "pageInfo" => %{
+              "hasNextPage" => Keyword.fetch!(opts, :has_next_page),
+              "endCursor" => Keyword.fetch!(opts, :end_cursor)
+            }
+          }
+        }
+      }
+    }
+  end
+
   defp project_issue_item(attrs) do
     number = Map.fetch!(attrs, :number)
     owner = Map.get(attrs, :owner, "xuelongmu")
     repo = Map.get(attrs, :repo, "symphony")
+    blocked_by_page_info = Map.get(attrs, :blocked_by_page_info, %{has_next_page: false, end_cursor: nil})
 
     %{
       "id" => Map.fetch!(attrs, :item_id),
@@ -357,6 +479,13 @@ defmodule SymphonyElixir.GitHubClientTest do
         },
         "labels" => %{
           "nodes" => Enum.map(Map.get(attrs, :labels, []), &%{"name" => &1})
+        },
+        "blockedBy" => %{
+          "nodes" => Enum.map(Map.get(attrs, :blocked_by, []), &blocker_issue(owner, repo, &1)),
+          "pageInfo" => %{
+            "hasNextPage" => Map.fetch!(blocked_by_page_info, :has_next_page),
+            "endCursor" => Map.fetch!(blocked_by_page_info, :end_cursor)
+          }
         }
       },
       "fieldValueByName" => %{
@@ -364,6 +493,19 @@ defmodule SymphonyElixir.GitHubClientTest do
         "name" => Map.fetch!(attrs, :status),
         "optionId" => "option-#{String.downcase(Map.fetch!(attrs, :status))}"
       }
+    }
+  end
+
+  defp blocker_issue(owner, repo, attrs) do
+    number = Map.fetch!(attrs, :number)
+
+    %{
+      "id" => Map.get(attrs, :id, "blocker-node-#{number}"),
+      "number" => number,
+      "title" => Map.fetch!(attrs, :title),
+      "state" => Map.fetch!(attrs, :state),
+      "url" => "https://github.com/#{owner}/#{repo}/issues/#{number}",
+      "repository" => %{"name" => repo, "owner" => %{"login" => owner}}
     }
   end
 

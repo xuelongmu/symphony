@@ -8,11 +8,12 @@ defmodule SymphonyElixir.GitHub.Client do
 
   @api_version "2026-03-10"
   @project_page_size 50
+  @blocked_by_page_size 50
   @field_page_size 50
   @max_error_body_log_bytes 1_000
 
   @project_items_query_user """
-  query SymphonyGitHubProjectItems($owner: String!, $number: Int!, $statusFieldName: String!, $first: Int!, $after: String) {
+  query SymphonyGitHubProjectItems($owner: String!, $number: Int!, $statusFieldName: String!, $first: Int!, $after: String, $blockedByFirst: Int!) {
     user(login: $owner) {
       projectV2(number: $number) {
         id
@@ -46,6 +47,25 @@ defmodule SymphonyElixir.GitHub.Client do
                     name
                   }
                 }
+                blockedBy(first: $blockedByFirst) {
+                  nodes {
+                    id
+                    number
+                    title
+                    state
+                    url
+                    repository {
+                      name
+                      owner {
+                        login
+                      }
+                    }
+                  }
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                }
               }
               ... on PullRequest {
                 id
@@ -71,7 +91,7 @@ defmodule SymphonyElixir.GitHub.Client do
   """
 
   @project_items_query_organization """
-  query SymphonyGitHubProjectItems($owner: String!, $number: Int!, $statusFieldName: String!, $first: Int!, $after: String) {
+  query SymphonyGitHubProjectItems($owner: String!, $number: Int!, $statusFieldName: String!, $first: Int!, $after: String, $blockedByFirst: Int!) {
     organization(login: $owner) {
       projectV2(number: $number) {
         id
@@ -105,6 +125,25 @@ defmodule SymphonyElixir.GitHub.Client do
                     name
                   }
                 }
+                blockedBy(first: $blockedByFirst) {
+                  nodes {
+                    id
+                    number
+                    title
+                    state
+                    url
+                    repository {
+                      name
+                      owner {
+                        login
+                      }
+                    }
+                  }
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                }
               }
               ... on PullRequest {
                 id
@@ -116,6 +155,34 @@ defmodule SymphonyElixir.GitHub.Client do
               ... on ProjectV2ItemFieldSingleSelectValue {
                 name
                 optionId
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+  """
+
+  @issue_blocked_by_query """
+  query SymphonyGitHubIssueBlockers($issueId: ID!, $first: Int!, $after: String) {
+    node(id: $issueId) {
+      ... on Issue {
+        blockedBy(first: $first, after: $after) {
+          nodes {
+            id
+            number
+            title
+            state
+            url
+            repository {
+              name
+              owner {
+                login
               }
             }
           }
@@ -377,24 +444,33 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   @doc false
-  @spec resolve_status_update_for_test(String.t(), String.t(), (String.t(), map() -> {:ok, map()} | {:error, term()})) ::
-          {:ok, map()} | {:error, term()}
+  @spec resolve_status_update_for_test(
+          String.t(),
+          String.t(),
+          (String.t(), map() -> {:ok, map()} | {:error, term()})
+        ) :: {:ok, map()} | {:error, term()}
   def resolve_status_update_for_test(issue_id, state_name, graphql_fun)
       when is_binary(issue_id) and is_binary(state_name) and is_function(graphql_fun, 2) do
     resolve_status_update(issue_id, state_name, graphql_fun)
   end
 
   @doc false
-  @spec create_comment_for_test(String.t(), String.t(), (atom(), String.t(), list(), map() | nil, keyword() ->
-                                                           {:ok, map()} | {:error, term()})) :: :ok | {:error, term()}
+  @spec create_comment_for_test(
+          String.t(),
+          String.t(),
+          (atom(), String.t(), list(), map() | nil, keyword() -> {:ok, map()} | {:error, term()})
+        ) :: :ok | {:error, term()}
   def create_comment_for_test(issue_id, body, request_fun)
       when is_binary(issue_id) and is_binary(body) and is_function(request_fun, 5) do
     create_comment(issue_id, body, request_fun)
   end
 
   @doc false
-  @spec patch_issue_state_for_test(String.t(), String.t(), (atom(), String.t(), list(), map() | nil, keyword() ->
-                                                              {:ok, map()} | {:error, term()})) :: :ok | {:error, term()}
+  @spec patch_issue_state_for_test(
+          String.t(),
+          String.t(),
+          (atom(), String.t(), list(), map() | nil, keyword() -> {:ok, map()} | {:error, term()})
+        ) :: :ok | {:error, term()}
   def patch_issue_state_for_test(issue_id, state_name, request_fun)
       when is_binary(issue_id) and is_binary(state_name) and is_function(request_fun, 5) do
     patch_issue_state(issue_id, state_name, request_fun)
@@ -404,16 +480,108 @@ defmodule SymphonyElixir.GitHub.Client do
   @spec github_rest_url_for_test(String.t()) :: String.t()
   def github_rest_url_for_test(path) when is_binary(path), do: github_rest_url(path)
 
-  defp fetch_project_issues(graphql_fun) when is_function(graphql_fun, 2) do
-    with {:ok, _project_id, items} <- fetch_project_items(graphql_fun) do
-      tracker = Config.settings!().tracker
+  @doc false
+  @spec normalize_project_item_for_test(map(), map()) :: Issue.t() | nil
+  def normalize_project_item_for_test(item, github_config) when is_map(item) and is_map(github_config) do
+    tracker = %{
+      owner: Map.get(github_config, :owner) || Map.get(github_config, "owner"),
+      repo: Map.get(github_config, :repo) || Map.get(github_config, "repo"),
+      terminal_states: Map.get(github_config, :terminal_states) || Map.get(github_config, "terminal_states") || ["Closed"]
+    }
 
+    normalize_project_item(item, tracker)
+  end
+
+  defp fetch_project_issues(graphql_fun) when is_function(graphql_fun, 2) do
+    tracker = Config.settings!().tracker
+
+    with {:ok, _project_id, items} <- fetch_project_items(graphql_fun),
+         items <- filter_project_issue_items_for_repo(items, tracker),
+         {:ok, items} <- hydrate_blocker_pages(items, graphql_fun) do
       issues =
         items
         |> Enum.map(&normalize_project_item(&1, tracker))
         |> Enum.reject(&is_nil/1)
 
       {:ok, issues}
+    end
+  end
+
+  defp filter_project_issue_items_for_repo(items, tracker) when is_list(items) do
+    Enum.filter(items, fn
+      %{"content" => %{"__typename" => "Issue"} = issue} -> repository_matches?(issue, tracker)
+      _ -> false
+    end)
+  end
+
+  defp hydrate_blocker_pages(items, graphql_fun) when is_list(items) and is_function(graphql_fun, 2) do
+    items
+    |> Enum.reduce_while({:ok, []}, fn item, {:ok, acc_items} ->
+      case hydrate_project_item_blockers(item, graphql_fun) do
+        {:ok, hydrated_item} -> {:cont, {:ok, [hydrated_item | acc_items]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, hydrated_items} -> {:ok, Enum.reverse(hydrated_items)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp hydrate_project_item_blockers(
+         %{"content" => %{"__typename" => "Issue", "id" => issue_id, "blockedBy" => blocked_by}} = item,
+         graphql_fun
+       )
+       when is_binary(issue_id) and is_map(blocked_by) do
+    blockers = Map.get(blocked_by, "nodes", [])
+
+    with true <- is_list(blockers),
+         {:ok, page_info} <- decode_blocker_page_info(blocked_by),
+         {:ok, hydrated_blockers} <-
+           fetch_remaining_blocker_pages(issue_id, page_info, graphql_fun, blockers) do
+      {:ok, put_in(item, ["content", "blockedBy", "nodes"], hydrated_blockers)}
+    else
+      false -> {:error, :github_unknown_issue_blockers_payload}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp hydrate_project_item_blockers(item, _graphql_fun), do: {:ok, item}
+
+  defp fetch_remaining_blocker_pages(issue_id, page_info, graphql_fun, acc_blockers) do
+    case next_page_cursor(page_info, :github_missing_blocked_by_end_cursor) do
+      {:ok, next_cursor} ->
+        do_fetch_blocker_page(issue_id, graphql_fun, next_cursor, acc_blockers)
+
+      :done ->
+        {:ok, acc_blockers}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp do_fetch_blocker_page(issue_id, graphql_fun, after_cursor, acc_blockers) do
+    variables = %{
+      issueId: issue_id,
+      first: @blocked_by_page_size,
+      after: after_cursor
+    }
+
+    with {:ok, body} <- graphql_fun.(@issue_blocked_by_query, variables),
+         {:ok, blockers, page_info} <- decode_issue_blockers_response(body) do
+      updated_blockers = acc_blockers ++ blockers
+
+      case next_page_cursor(page_info, :github_missing_blocked_by_end_cursor) do
+        {:ok, next_cursor} ->
+          do_fetch_blocker_page(issue_id, graphql_fun, next_cursor, updated_blockers)
+
+        :done ->
+          {:ok, updated_blockers}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -432,6 +600,7 @@ defmodule SymphonyElixir.GitHub.Client do
       number: tracker.project_number,
       statusFieldName: tracker.project_status_field,
       first: @project_page_size,
+      blockedByFirst: @blocked_by_page_size,
       after: after_cursor
     }
 
@@ -575,11 +744,15 @@ defmodule SymphonyElixir.GitHub.Client do
       :ok
     else
       {:ok, response} ->
-        {:error, {:github_comment_create_status, response_status(response), summarize_error_body(response_body(response))}}
+        {:error, github_comment_create_status(response)}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp github_comment_create_status(response) do
+    {:github_comment_create_status, response_status(response), summarize_error_body(response_body(response))}
   end
 
   defp patch_issue_state(issue_id, state_name, request_fun) when is_function(request_fun, 5) do
@@ -734,6 +907,25 @@ defmodule SymphonyElixir.GitHub.Client do
 
   defp decode_project_items_response(_response, _owner_key), do: {:error, :github_unknown_project_items_payload}
 
+  defp decode_issue_blockers_response(%{"errors" => errors}), do: {:error, {:github_graphql_errors, errors}}
+
+  defp decode_issue_blockers_response(%{"data" => %{"node" => nil}}), do: {:error, :github_issue_not_found}
+
+  defp decode_issue_blockers_response(%{"data" => %{"node" => %{"blockedBy" => blocked_by}}})
+       when is_map(blocked_by) do
+    case blocked_by do
+      %{"nodes" => blockers} when is_list(blockers) ->
+        with {:ok, page_info} <- decode_blocker_page_info(blocked_by) do
+          {:ok, blockers, page_info}
+        end
+
+      _ ->
+        {:error, :github_unknown_issue_blockers_payload}
+    end
+  end
+
+  defp decode_issue_blockers_response(_response), do: {:error, :github_unknown_issue_blockers_payload}
+
   defp decode_project_fields_response(%{"errors" => errors}, _owner_key), do: {:error, {:github_graphql_errors, errors}}
 
   defp decode_project_fields_response(%{"data" => data}, owner_key) when is_map(data) do
@@ -758,6 +950,12 @@ defmodule SymphonyElixir.GitHub.Client do
 
   defp decode_project_fields_response(_response, _owner_key), do: {:error, :github_unknown_project_fields_payload}
 
+  defp decode_blocker_page_info(%{"pageInfo" => %{"hasNextPage" => has_next_page, "endCursor" => end_cursor}}) do
+    {:ok, %{has_next_page: has_next_page == true, end_cursor: end_cursor}}
+  end
+
+  defp decode_blocker_page_info(_blocked_by), do: {:error, :github_unknown_issue_blockers_payload}
+
   defp normalize_project_item(%{"content" => %{"__typename" => "Issue"} = issue} = item, tracker) do
     if repository_matches?(issue, tracker) do
       number = issue["number"]
@@ -774,7 +972,7 @@ defmodule SymphonyElixir.GitHub.Client do
         branch_name: nil,
         url: issue["url"],
         assignee_id: List.first(assignees),
-        blocked_by: [],
+        blocked_by: blocker_refs(issue, tracker),
         labels: label_names(issue),
         assigned_to_worker: true,
         created_at: parse_datetime(issue["createdAt"]),
@@ -848,6 +1046,49 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   defp label_names(_issue), do: []
+
+  defp blocker_refs(%{"blockedBy" => %{"nodes" => blockers}}, tracker) when is_list(blockers) do
+    Enum.map(blockers, fn blocker ->
+      %{
+        id: blocker["id"],
+        identifier: blocker_identifier(blocker, tracker),
+        title: blocker["title"],
+        state: blocker_state(blocker, tracker),
+        source: "github",
+        url: blocker["url"]
+      }
+    end)
+  end
+
+  defp blocker_refs(_issue, _tracker), do: []
+
+  defp blocker_identifier(%{"number" => number, "repository" => repository}, tracker) do
+    owner = get_in(repository || %{}, ["owner", "login"]) || tracker.owner
+    repo = (repository || %{})["name"] || tracker.repo
+
+    case issue_number_id(number) do
+      nil ->
+        nil
+
+      issue_id ->
+        [
+          "github",
+          identifier_segment(owner),
+          identifier_segment(repo),
+          identifier_segment(issue_id)
+        ]
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.join("-")
+    end
+  end
+
+  defp blocker_identifier(_blocker, _tracker), do: nil
+
+  defp blocker_state(%{"state" => state}, tracker) when is_binary(state) do
+    if normalized(state) == "closed", do: closed_issue_state(tracker), else: "Open"
+  end
+
+  defp blocker_state(_blocker, _tracker), do: nil
 
   defp issue_number_id(number) when is_integer(number), do: Integer.to_string(number)
   defp issue_number_id(number) when is_binary(number), do: number

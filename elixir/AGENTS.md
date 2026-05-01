@@ -48,6 +48,9 @@ mix specs.check
 
 ## PR Requirements
 
+- Do not name branches with the `codex/` prefix.
+- Do not create or target PRs in `openai/symphony`; keep PRs on the user's own
+  repository/fork/local remote unless explicitly instructed otherwise.
 - PR titles must describe the change directly; do not prefix them with `[codex]`.
 - Once a PR exists or review feedback has started, address follow-up work with new commits instead
   of amending existing commits. Do not force-push unless explicitly requested or needed for recovery.

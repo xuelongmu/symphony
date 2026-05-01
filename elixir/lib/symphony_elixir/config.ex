@@ -11,6 +11,7 @@ defmodule SymphonyElixir.Config do
 
   Identifier: {{ issue.identifier }}
   Title: {{ issue.title }}
+  Agent role: {{ agent.role }}
 
   Body:
   {% if issue.description %}
@@ -115,42 +116,66 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_semantics(settings) do
+    with :ok <- validate_tracker_kind(settings.tracker.kind),
+         :ok <- validate_tracker_config(settings.tracker) do
+      validate_review_config(settings.review, settings.tracker)
+    end
+  end
+
+  defp validate_tracker_kind(nil), do: {:error, :missing_tracker_kind}
+  defp validate_tracker_kind(kind) when kind in ["linear", "memory", "github"], do: :ok
+  defp validate_tracker_kind(kind), do: {:error, {:unsupported_tracker_kind, kind}}
+
+  defp validate_tracker_config(%{kind: "linear"} = tracker) do
     cond do
-      is_nil(settings.tracker.kind) ->
-        {:error, :missing_tracker_kind}
+      not is_binary(tracker.api_key) -> {:error, :missing_linear_api_token}
+      not is_binary(tracker.project_slug) -> {:error, :missing_linear_project_slug}
+      true -> :ok
+    end
+  end
 
-      settings.tracker.kind not in ["linear", "github", "memory"] ->
-        {:error, {:unsupported_tracker_kind, settings.tracker.kind}}
-
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.api_key) ->
-        {:error, :missing_linear_api_token}
-
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.project_slug) ->
-        {:error, :missing_linear_project_slug}
-
-      settings.tracker.kind == "github" and not is_binary(settings.tracker.api_key) ->
+  defp validate_tracker_config(%{kind: "github"} = tracker) do
+    cond do
+      not is_binary(tracker.api_key) ->
         {:error, :missing_github_api_token}
 
-      settings.tracker.kind == "github" and not is_binary(settings.tracker.owner) ->
+      not is_binary(tracker.owner) ->
         {:error, :missing_github_owner}
 
-      settings.tracker.kind == "github" and not is_binary(settings.tracker.repo) ->
+      not is_binary(tracker.repo) ->
         {:error, :missing_github_repo}
 
-      settings.tracker.kind == "github" and not is_binary(settings.tracker.project_owner) ->
+      not is_binary(tracker.project_owner) ->
         {:error, :missing_github_project_owner}
 
-      settings.tracker.kind == "github" and
-          settings.tracker.project_owner_type not in ["user", "organization", "org"] ->
-        {:error, {:unsupported_github_project_owner_type, settings.tracker.project_owner_type}}
+      tracker.project_owner_type not in ["user", "organization", "org"] ->
+        {:error, {:unsupported_github_project_owner_type, tracker.project_owner_type}}
 
-      settings.tracker.kind == "github" and not is_integer(settings.tracker.project_number) ->
+      not is_integer(tracker.project_number) ->
         {:error, :missing_github_project_number}
+
+      not is_binary(tracker.project_status_field) ->
+        {:error, :missing_github_project_status_field}
 
       true ->
         :ok
     end
   end
+
+  defp validate_tracker_config(_tracker), do: :ok
+
+  defp validate_review_config(%{enabled: true, state: state}, %{active_states: active_states})
+       when is_binary(state) and is_list(active_states) do
+    review_state = Schema.normalize_issue_state(state)
+
+    if Enum.any?(active_states, &(Schema.normalize_issue_state(&1) == review_state)) do
+      :ok
+    else
+      {:error, {:review_state_not_active, state}}
+    end
+  end
+
+  defp validate_review_config(_review, _tracker), do: :ok
 
   defp format_config_error(reason) do
     case reason do
@@ -165,6 +190,9 @@ defmodule SymphonyElixir.Config do
 
       :workflow_front_matter_not_a_map ->
         "Failed to parse WORKFLOW.md: workflow front matter must decode to a map"
+
+      {:review_state_not_active, state} ->
+        "Invalid WORKFLOW.md config: review.state #{inspect(state)} must be included in tracker.active_states when review.enabled is true"
 
       other ->
         "Invalid WORKFLOW.md config: #{inspect(other)}"

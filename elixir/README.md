@@ -47,7 +47,7 @@ workspaces.
      project owner, project number, and status field. GitHub Issues alone only has `open` and
      `closed`; Symphony uses the configured Projects v2 Status field as the workflow state source.
    - When creating a workflow based on this repo, note that it depends on non-standard Linear
-     issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
+     issue statuses: "Agent Review", "Rework", "Human Review", and "Merging". You can customize them in
      Team Settings → Workflow in Linear.
 6. Follow the instructions below to install the required runtime dependencies and start the service.
 
@@ -193,9 +193,10 @@ codex:
   command: codex app-server
 ---
 
-You are working on a Linear issue {{ issue.identifier }}.
+You are working on a tracker issue {{ issue.identifier }}.
 
 Title: {{ issue.title }} Body: {{ issue.description }}
+Agent role: {{ agent.role }}
 ```
 
 Minimal GitHub Issues + Projects v2 example:
@@ -237,9 +238,14 @@ Title: {{ issue.title }} Body: {{ issue.description }}
 Notes:
 
 - If a value is missing, defaults are used.
+- `tracker.kind` supports `linear` and `github`. GitHub tracker mode uses a GitHub Projects v2
+  Status field for workflow state and GitHub issue dependencies for `blocked_by`.
 - For `tracker.kind: github`, configure `owner`, `repo`, `project_owner`,
   `project_owner_type`, `project_number`, `project_status_field`, `active_states`,
   `terminal_states`, and an API token through `api_key` or `GITHUB_TOKEN`.
+  New workflows may instead use the nested `tracker.github.owner`, `tracker.github.repo`,
+  `tracker.github.project_number`, and `tracker.github.status_field` keys; Symphony maps them
+  onto the same runtime fields.
 - GitHub Issues only has `open` and `closed`; the configured Projects v2 `project_status_field`
   value is the workflow state that Symphony compares against `active_states` and
   `terminal_states`.
@@ -263,14 +269,18 @@ Notes:
   Symphony validation.
 - `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
+- `review.enabled` enables the automated `Agent Review` role/state loop. Review agents inspect and
+  route PRs but do not make implementation changes.
+- `review.max_rounds` caps automated review-agent dispatches before Symphony hands the issue to
+  `Human Review`. Default: `3`.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
-  identifier, title, and body.
+  identifier, title, agent role, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
-- `tracker.api_key` reads from `LINEAR_API_KEY` for Linear or `GITHUB_TOKEN` for GitHub when unset
-  or when value is the matching `$VAR`.
+- `tracker.api_key` reads from `LINEAR_API_KEY` for Linear or `GITHUB_TOKEN`/`GH_TOKEN` for GitHub
+  when unset or when value is the matching `$VAR`.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the

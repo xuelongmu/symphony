@@ -12,11 +12,11 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Config
       alias SymphonyElixir.HttpServer
       alias SymphonyElixir.Linear.Client
-      alias SymphonyElixir.Tracker.Issue
       alias SymphonyElixir.Orchestrator
       alias SymphonyElixir.PromptBuilder
       alias SymphonyElixir.StatusDashboard
       alias SymphonyElixir.Tracker
+      alias SymphonyElixir.Tracker.Issue
       alias SymphonyElixir.Workflow
       alias SymphonyElixir.WorkflowStore
       alias SymphonyElixir.Workspace
@@ -41,6 +41,7 @@ defmodule SymphonyElixir.TestSupport do
         on_exit(fn ->
           Application.delete_env(:symphony_elixir, :workflow_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
+          Application.delete_env(:symphony_elixir, :github_client_module)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
           File.rm_rf(workflow_root)
@@ -96,6 +97,10 @@ defmodule SymphonyElixir.TestSupport do
           tracker_endpoint: "https://api.linear.app/graphql",
           tracker_api_token: "token",
           tracker_project_slug: "project",
+          tracker_github_owner: nil,
+          tracker_github_repo: nil,
+          tracker_github_project_number: nil,
+          tracker_github_status_field: "Status",
           tracker_owner: nil,
           tracker_repo: nil,
           tracker_project_owner: nil,
@@ -113,6 +118,9 @@ defmodule SymphonyElixir.TestSupport do
           max_turns: 20,
           max_retry_backoff_ms: 300_000,
           max_concurrent_agents_by_state: %{},
+          review_enabled: false,
+          review_state: "Agent Review",
+          review_max_rounds: 3,
           codex_command: "codex app-server",
           codex_approval_policy: %{reject: %{sandbox_approval: true, rules: true, mcp_elicitations: true}},
           codex_thread_sandbox: "workspace-write",
@@ -139,6 +147,10 @@ defmodule SymphonyElixir.TestSupport do
     tracker_endpoint = Keyword.get(config, :tracker_endpoint)
     tracker_api_token = Keyword.get(config, :tracker_api_token)
     tracker_project_slug = Keyword.get(config, :tracker_project_slug)
+    tracker_github_owner = Keyword.get(config, :tracker_github_owner)
+    tracker_github_repo = Keyword.get(config, :tracker_github_repo)
+    tracker_github_project_number = Keyword.get(config, :tracker_github_project_number)
+    tracker_github_status_field = Keyword.get(config, :tracker_github_status_field)
     tracker_owner = Keyword.get(config, :tracker_owner)
     tracker_repo = Keyword.get(config, :tracker_repo)
     tracker_project_owner = Keyword.get(config, :tracker_project_owner)
@@ -156,6 +168,9 @@ defmodule SymphonyElixir.TestSupport do
     max_turns = Keyword.get(config, :max_turns)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
     max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
+    review_enabled = Keyword.get(config, :review_enabled)
+    review_state = Keyword.get(config, :review_state)
+    review_max_rounds = Keyword.get(config, :review_max_rounds)
     codex_command = Keyword.get(config, :codex_command)
     codex_approval_policy = Keyword.get(config, :codex_approval_policy)
     codex_thread_sandbox = Keyword.get(config, :codex_thread_sandbox)
@@ -183,6 +198,12 @@ defmodule SymphonyElixir.TestSupport do
         "  endpoint: #{yaml_value(tracker_endpoint)}",
         "  api_key: #{yaml_value(tracker_api_token)}",
         "  project_slug: #{yaml_value(tracker_project_slug)}",
+        github_yaml(
+          tracker_github_owner,
+          tracker_github_repo,
+          tracker_github_project_number,
+          tracker_github_status_field
+        ),
         "  owner: #{yaml_value(tracker_owner)}",
         "  repo: #{yaml_value(tracker_repo)}",
         "  project_owner: #{yaml_value(tracker_project_owner)}",
@@ -202,6 +223,7 @@ defmodule SymphonyElixir.TestSupport do
         "  max_turns: #{yaml_value(max_turns)}",
         "  max_retry_backoff_ms: #{yaml_value(max_retry_backoff_ms)}",
         "  max_concurrent_agents_by_state: #{yaml_value(max_concurrent_agents_by_state)}",
+        review_yaml(review_enabled, review_state, review_max_rounds),
         "codex:",
         "  command: #{yaml_value(codex_command)}",
         "  approval_policy: #{yaml_value(codex_approval_policy)}",
@@ -275,6 +297,29 @@ defmodule SymphonyElixir.TestSupport do
         "  max_concurrent_agents_per_host: #{yaml_value(max_concurrent_agents_per_host)}"
     ]
     |> Enum.reject(&(&1 in [nil, false]))
+    |> Enum.join("\n")
+  end
+
+  defp github_yaml(nil, nil, nil, _status_field), do: nil
+
+  defp github_yaml(owner, repo, project_number, status_field) do
+    [
+      "  github:",
+      "    owner: #{yaml_value(owner)}",
+      "    repo: #{yaml_value(repo)}",
+      "    project_number: #{yaml_value(project_number)}",
+      "    status_field: #{yaml_value(status_field)}"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp review_yaml(enabled, state, max_rounds) do
+    [
+      "review:",
+      "  enabled: #{yaml_value(enabled)}",
+      "  state: #{yaml_value(state)}",
+      "  max_rounds: #{yaml_value(max_rounds)}"
+    ]
     |> Enum.join("\n")
   end
 

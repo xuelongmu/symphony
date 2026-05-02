@@ -131,7 +131,8 @@ defmodule SymphonyElixir.CoreTest do
       tracker_github_status_field: "Workflow State",
       review_enabled: true,
       review_state: "Agent Review",
-      review_max_rounds: 4
+      review_max_rounds: 4,
+      tracker_active_states: ["Todo", "In Progress", "Agent Review"]
     )
 
     assert :ok = Config.validate!()

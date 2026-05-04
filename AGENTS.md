@@ -1,3 +1,1 @@
-# Symphony
-
 @elixir/AGENTS.md

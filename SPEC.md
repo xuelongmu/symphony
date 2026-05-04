@@ -396,6 +396,17 @@ Fields:
   - Default: `Todo`, `In Progress`
 - `terminal_states` (list of strings)
   - Default: `Closed`, `Cancelled`, `Canceled`, `Duplicate`, `Done`
+- `required_labels` (list of strings)
+  - Default: `[]`
+  - When present, every listed label is required before an active issue can be dispatched.
+- `current_iteration` (object)
+  - OPTIONAL dispatch intake gate for trackers that expose iteration metadata.
+  - Fields:
+    - `field` (string, default `Iteration`)
+      - Projects v2 iteration field name.
+    - `states` (list of strings, default `[]`)
+      - Active state names that require the issue's iteration to be the current iteration before
+        dispatch. Empty list disables the gate.
 
 GitHub tracker notes:
 
@@ -405,6 +416,9 @@ GitHub tracker notes:
   `terminal_states`, prompt rendering, and reconciliation.
 - Candidate issues come from issues in `owner/repo` that are present in the configured Projects v2
   project and whose `project_status_field` option is in `active_states`.
+- If `tracker.current_iteration.states` contains the candidate's normalized state, the candidate is
+  dispatch-eligible only when its configured Projects v2 iteration value matches the current
+  iteration calculated from the Project iteration field's `startDate` and `duration`.
 - The GitHub token MUST be able to read and update repository issues and read and update the
   configured Projects v2 project. For fine-grained tokens, grant repository Issues read/write and
   project read/write access for the project owner. For classic personal access tokens, Projects v2
@@ -655,6 +669,9 @@ not require recognizing or validating extension fields unless that extension is 
 - `tracker.github.status_field`: optional source for `tracker.project_status_field`, default `Status`
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
+- `tracker.required_labels`: list of strings, default `[]`
+- `tracker.current_iteration.field`: string, default `Iteration`
+- `tracker.current_iteration.states`: list of strings, default `[]`
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path resolved to absolute, default `<system-temp>/symphony_workspaces`
 - `hooks.after_create`: shell script or null
@@ -808,6 +825,10 @@ An issue is dispatch-eligible only if all are true:
 - Per-state concurrency slots are available.
 - Blocker rule passes:
   - Do not dispatch any active candidate when any blocker is non-terminal.
+- Current-iteration gate passes:
+  - If `tracker.current_iteration.states` includes the issue state, dispatch only when the issue has
+    Projects v2 iteration metadata and that iteration is the current iteration.
+  - If the issue state is not listed in `tracker.current_iteration.states`, this gate does not apply.
 
 Sorting order (stable intent):
 
@@ -1265,6 +1286,9 @@ GitHub-specific requirements for `tracker.kind == "github"`:
   `organization` owner.
 - `tracker.project_status_field` names the Projects v2 single-select field used as the normalized
   issue `state`.
+- When `tracker.current_iteration.states` is non-empty, the adapter reads the configured Projects v2
+  iteration field value for project items and the field's iteration configuration. The current
+  iteration is the iteration where `startDate <= current_date < startDate + duration`.
 - Candidate issue query filters to project items whose content is an issue in `owner/repo` and whose
   `project_status_field` option is in `tracker.active_states`.
 - Issue-state refresh by ID returns the current Projects v2 `project_status_field` option for each

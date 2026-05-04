@@ -111,6 +111,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           tracker_required_labels: [],
+          tracker_current_iteration: nil,
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
           worker_ssh_hosts: [],
@@ -162,6 +163,7 @@ defmodule SymphonyElixir.TestSupport do
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     tracker_required_labels = Keyword.get(config, :tracker_required_labels)
+    tracker_current_iteration = Keyword.get(config, :tracker_current_iteration)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     workspace_root = Keyword.get(config, :workspace_root)
     worker_ssh_hosts = Keyword.get(config, :worker_ssh_hosts)
@@ -216,6 +218,7 @@ defmodule SymphonyElixir.TestSupport do
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
         "  required_labels: #{yaml_value(tracker_required_labels)}",
+        current_iteration_yaml(tracker_current_iteration),
         "polling:",
         "  interval_ms: #{yaml_value(poll_interval_ms)}",
         "workspace:",
@@ -314,6 +317,26 @@ defmodule SymphonyElixir.TestSupport do
       "    status_field: #{yaml_value(status_field)}"
     ]
     |> Enum.join("\n")
+  end
+
+  defp current_iteration_yaml(nil), do: nil
+
+  defp current_iteration_yaml(config) when is_list(config) or is_map(config) do
+    field = config_value(config, :field)
+    states = config_value(config, :states)
+
+    [
+      "  current_iteration:",
+      "    field: #{yaml_value(field)}",
+      "    states: #{yaml_value(states)}"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp config_value(config, key) when is_list(config), do: Keyword.get(config, key)
+
+  defp config_value(config, key) when is_map(config) do
+    Map.get(config, key) || Map.get(config, to_string(key))
   end
 
   defp review_yaml(enabled, state, max_rounds) do

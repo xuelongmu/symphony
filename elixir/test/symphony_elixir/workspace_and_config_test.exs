@@ -312,16 +312,33 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "config parses tracker required labels and defaults to none" do
     assert {:ok, settings} = Schema.parse(%{tracker: %{kind: "memory"}})
     assert settings.tracker.required_labels == []
+    assert settings.tracker.current_iteration.field == "Iteration"
+    assert settings.tracker.current_iteration.states == []
 
     assert {:ok, settings} =
              Schema.parse(%{
                tracker: %{
                  kind: "github",
-                 required_labels: ["symphony", "agent-owned"]
+                 required_labels: ["symphony", "agent-owned"],
+                 current_iteration: %{field: "Iteration", states: ["Ready"]}
                }
              })
 
     assert settings.tracker.required_labels == ["symphony", "agent-owned"]
+    assert settings.tracker.current_iteration.field == "Iteration"
+    assert settings.tracker.current_iteration.states == ["Ready"]
+  end
+
+  test "config requires current iteration field when gate states are enabled" do
+    assert {:error, {:invalid_workflow_config, message}} =
+             Schema.parse(%{
+               tracker: %{
+                 kind: "github",
+                 current_iteration: %{field: nil, states: ["Ready"]}
+               }
+             })
+
+    assert message =~ "tracker.current_iteration.field"
   end
 
   test "linear client normalizes blockers from inverse relations" do
@@ -751,6 +768,73 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     partially_labeled_issue = %{issue | id: "manual-2", labels: ["symphony"]}
 
     refute Orchestrator.should_dispatch_issue_for_test(partially_labeled_issue, state)
+  end
+
+  test "ready issue in current iteration is dispatch-eligible when iteration gate is enabled" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Ready", "In Progress"],
+      tracker_current_iteration: %{field: "Iteration", states: ["Ready"]}
+    )
+
+    issue = %Issue{
+      id: "iteration-ready-1",
+      identifier: "MT-1013",
+      title: "Ready current work",
+      state: "Ready",
+      iteration: %{current: true}
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, empty_dispatch_state())
+  end
+
+  test "ready issue outside current iteration is not dispatch-eligible when iteration gate is enabled" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Ready", "In Progress"],
+      tracker_current_iteration: %{field: "Iteration", states: ["Ready"]}
+    )
+
+    issue = %Issue{
+      id: "iteration-ready-2",
+      identifier: "MT-1014",
+      title: "Ready future work",
+      state: "Ready",
+      iteration: %{current: false}
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, empty_dispatch_state())
+  end
+
+  test "ready issue without iteration is not dispatch-eligible when iteration gate is enabled" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Ready", "In Progress"],
+      tracker_current_iteration: %{field: "Iteration", states: ["Ready"]}
+    )
+
+    issue = %Issue{
+      id: "iteration-ready-3",
+      identifier: "MT-1015",
+      title: "Ready unplanned work",
+      state: "Ready"
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, empty_dispatch_state())
+  end
+
+  test "iteration gate does not block non-gated active states" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Ready", "In Progress"],
+      tracker_current_iteration: %{field: "Iteration", states: ["Ready"]}
+    )
+
+    issue = %Issue{
+      id: "iteration-progress-1",
+      identifier: "MT-1016",
+      title: "Already underway",
+      state: "In Progress",
+      iteration: %{current: false}
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, empty_dispatch_state())
   end
 
   test "active issue with terminal blockers remains dispatch-eligible" do
@@ -1583,6 +1667,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     after
       File.rm_rf(test_root)
     end
+  end
+
+  defp empty_dispatch_state do
+    %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
   end
 
   defp maybe_write_windows_wrapper!(script_path) do

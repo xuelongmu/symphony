@@ -110,6 +110,113 @@ defmodule SymphonyElixir.GitHubClientTest do
     assert_receive {:project_items_query, ^query, %{after: "cursor-1", blockedByFirst: 50, first: 50, statusFieldName: "Status"}}
   end
 
+  test "fetches project iteration metadata and marks the current iteration" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_endpoint: "https://api.github.test",
+      tracker_api_token: "github-token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_owner_type: "user",
+      tracker_project_number: 1,
+      tracker_project_status_field: "Status",
+      tracker_active_states: ["Ready"],
+      tracker_terminal_states: ["Closed", "Done"],
+      tracker_current_iteration: %{field: "Iteration", states: ["Ready"]}
+    )
+
+    start_date = Date.utc_today() |> Date.add(-1)
+    start_date_iso = Date.to_iso8601(start_date)
+
+    graphql_fun = fn query, variables ->
+      cond do
+        query =~ "SymphonyGitHubProjectItems" ->
+          send(self(), {:project_items_query, query, variables})
+
+          item =
+            project_issue_item(%{
+              item_id: "item-1",
+              number: 1,
+              title: "Ready current iteration",
+              status: "Ready",
+              state: "OPEN"
+            })
+            |> Map.put(
+              "iterationFieldValue",
+              project_iteration_value(%{
+                id: "iteration-current",
+                title: "Current",
+                start_date: start_date_iso,
+                duration: 14
+              })
+            )
+
+          {:ok, project_items_response([item], has_next_page: false, end_cursor: nil)}
+
+        query =~ "SymphonyGitHubProjectFields" ->
+          send(self(), {:project_fields_query, query, variables})
+
+          {:ok,
+           project_fields_response([
+             project_iteration_field(%{
+               id: "field-iteration",
+               name: "Iteration",
+               iterations: [
+                 %{
+                   "id" => "iteration-current",
+                   "title" => "Current",
+                   "startDate" => start_date_iso,
+                   "duration" => 14
+                 }
+               ]
+             })
+           ])}
+      end
+    end
+
+    assert {:ok, [issue]} = GitHubClient.fetch_candidate_issues_for_test(graphql_fun)
+
+    assert issue.iteration == %{
+             iteration_id: "iteration-current",
+             title: "Current",
+             start_date: start_date,
+             duration: 14,
+             current: true
+           }
+
+    assert_receive {:project_items_query, query,
+                    %{
+                      after: nil,
+                      blockedByFirst: 50,
+                      first: 50,
+                      iterationFieldName: "Iteration",
+                      statusFieldName: "Status"
+                    }}
+
+    assert query =~ "iterationFieldValue"
+    assert_receive {:project_fields_query, fields_query, %{after: nil, first: 50, number: 1, owner: "xuelongmu"}}
+    assert fields_query =~ "ProjectV2IterationField"
+  end
+
+  test "current iteration calculation treats duration end dates as exclusive" do
+    iterations = [
+      %{"id" => "iteration-2", "title" => "Iteration 2", "startDate" => "2026-05-01", "duration" => 14},
+      %{"id" => "iteration-3", "title" => "Iteration 3", "startDate" => "2026-05-15", "duration" => 14}
+    ]
+
+    assert GitHubClient.current_iteration_from_iterations_for_test(iterations, ~D[2026-05-01]).iteration_id ==
+             "iteration-2"
+
+    assert GitHubClient.current_iteration_from_iterations_for_test(iterations, ~D[2026-05-14]).iteration_id ==
+             "iteration-2"
+
+    assert GitHubClient.current_iteration_from_iterations_for_test(iterations, ~D[2026-05-15]).iteration_id ==
+             "iteration-3"
+
+    assert GitHubClient.current_iteration_from_iterations_for_test(iterations, ~D[2026-04-30]) == nil
+  end
+
   test "fetches all blocker dependency pages before returning candidates" do
     graphql_fun = fn query, variables ->
       cond do
@@ -436,6 +543,29 @@ defmodule SymphonyElixir.GitHubClientTest do
           }
         }
       }
+    }
+  end
+
+  defp project_iteration_field(attrs) do
+    %{
+      "__typename" => "ProjectV2IterationField",
+      "id" => Map.fetch!(attrs, :id),
+      "name" => Map.fetch!(attrs, :name),
+      "dataType" => "ITERATION",
+      "configuration" => %{
+        "iterations" => Map.get(attrs, :iterations, []),
+        "completedIterations" => Map.get(attrs, :completed_iterations, [])
+      }
+    }
+  end
+
+  defp project_iteration_value(attrs) do
+    %{
+      "__typename" => "ProjectV2ItemFieldIterationValue",
+      "iterationId" => Map.fetch!(attrs, :id),
+      "title" => Map.fetch!(attrs, :title),
+      "startDate" => Map.fetch!(attrs, :start_date),
+      "duration" => Map.fetch!(attrs, :duration)
     }
   end
 

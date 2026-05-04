@@ -1081,8 +1081,6 @@ defmodule SymphonyElixir.GitHub.Client do
     |> normalize_project_iteration_value(current_iteration)
   end
 
-  defp project_iteration(_item, _current_iteration), do: nil
-
   defp project_iteration_value(%{
          "iterationFieldValue" => %{"__typename" => "ProjectV2ItemFieldIterationValue"} = value
        }),

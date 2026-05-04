@@ -394,9 +394,9 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_project_link_lines do
     project_part =
-      case Config.settings!().tracker.project_slug do
-        project_slug when is_binary(project_slug) and project_slug != "" ->
-          colorize(linear_project_url(project_slug), @ansi_cyan)
+      case project_url(Config.settings!().tracker) do
+        url when is_binary(url) ->
+          colorize(url, @ansi_cyan)
 
         _ ->
           colorize("n/a", @ansi_gray)
@@ -426,6 +426,33 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_project_refresh_line(_) do
     colorize("│ Next refresh: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
   end
+
+  defp project_url(%{kind: "linear", project_slug: project_slug})
+       when is_binary(project_slug) and project_slug != "" do
+    linear_project_url(project_slug)
+  end
+
+  defp project_url(%{
+         kind: "github",
+         project_owner: project_owner,
+         project_owner_type: project_owner_type,
+         project_number: project_number
+       })
+       when is_binary(project_owner) and project_owner != "" and is_integer(project_number) and
+              project_number > 0 do
+    case project_owner_type do
+      owner_type when owner_type in ["organization", "org"] ->
+        "https://github.com/orgs/#{project_owner}/projects/#{project_number}"
+
+      "user" ->
+        "https://github.com/users/#{project_owner}/projects/#{project_number}"
+
+      _ ->
+        nil
+    end
+  end
+
+  defp project_url(_tracker), do: nil
 
   defp linear_project_url(project_slug), do: "https://linear.app/project/#{project_slug}/issues"
 

@@ -199,6 +199,82 @@ defmodule SymphonyElixir.GitHubClientTest do
     assert fields_query =~ "ProjectV2IterationField"
   end
 
+  test "fetches active candidates when no project iteration is currently active" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_endpoint: "https://api.github.test",
+      tracker_api_token: "github-token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_owner_type: "user",
+      tracker_project_number: 1,
+      tracker_project_status_field: "Status",
+      tracker_active_states: ["Ready", "In Progress"],
+      tracker_terminal_states: ["Closed", "Done"],
+      tracker_current_iteration: %{field: "Iteration", states: ["Ready"]}
+    )
+
+    graphql_fun = fn query, _variables ->
+      cond do
+        query =~ "SymphonyGitHubProjectItems" ->
+          {:ok,
+           project_items_response(
+             [
+               project_issue_item(%{
+                 item_id: "item-1",
+                 number: 1,
+                 title: "Ready planned earlier",
+                 status: "Ready",
+                 state: "OPEN"
+               })
+               |> Map.put(
+                 "iterationFieldValue",
+                 project_iteration_value(%{
+                   id: "iteration-old",
+                   title: "Old",
+                   start_date: "2026-04-01",
+                   duration: 14
+                 })
+               ),
+               project_issue_item(%{
+                 item_id: "item-2",
+                 number: 2,
+                 title: "Continue active work",
+                 status: "In Progress",
+                 state: "OPEN"
+               })
+             ],
+             has_next_page: false,
+             end_cursor: nil
+           )}
+
+        query =~ "SymphonyGitHubProjectFields" ->
+          {:ok,
+           project_fields_response([
+             project_iteration_field(%{
+               id: "field-iteration",
+               name: "Iteration",
+               completed_iterations: [
+                 %{
+                   "id" => "iteration-old",
+                   "title" => "Old",
+                   "startDate" => "2026-04-01",
+                   "duration" => 14
+                 }
+               ],
+               iterations: []
+             })
+           ])}
+      end
+    end
+
+    assert {:ok, issues} = GitHubClient.fetch_candidate_issues_for_test(graphql_fun)
+
+    assert Enum.map(issues, & &1.state) == ["Ready", "In Progress"]
+    assert hd(issues).iteration.current == false
+  end
+
   test "current iteration calculation treats duration end dates as exclusive" do
     iterations = [
       %{"id" => "iteration-2", "title" => "Iteration 2", "startDate" => "2026-05-01", "duration" => 14},

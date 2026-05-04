@@ -1140,7 +1140,7 @@ defmodule SymphonyElixir.GitHub.Client do
     |> project_field_iterations()
     |> current_iteration_from_iterations(date)
     |> case do
-      nil -> {:error, {:github_project_current_iteration_not_found, field["name"], Date.to_iso8601(date)}}
+      nil -> {:ok, nil}
       current_iteration -> {:ok, current_iteration}
     end
   end

@@ -14,7 +14,7 @@ A typical project setup is:
 - `In review`: work is done and waiting for review.
 - `Done`: terminal state.
 
-In the workflow config, `tracker.active_states` controls what Symphony may dispatch. For a safe first run, use only `Ready` as active. That prevents existing `In progress` issues from being picked up just because you started the dashboard.
+In the workflow config, `tracker.active_states` controls what project statuses Symphony may dispatch. To avoid taking over manually owned issues that are already `Ready` or `In progress`, also set `tracker.required_labels` to an explicit ownership label such as `symphony`.
 
 ## GitHub Setup
 
@@ -53,6 +53,8 @@ tracker:
   project_status_field: Status
   active_states:
     - Ready
+  required_labels:
+    - symphony
   terminal_states:
     - Done
     - Closed
@@ -94,6 +96,7 @@ Important fields:
 - `tracker.project_owner`, `tracker.project_owner_type`, and `tracker.project_number` identify the Project v2 board.
 - `tracker.project_status_field` names the single-select field Symphony reads.
 - `tracker.active_states` controls what can be dispatched.
+- `tracker.required_labels` optionally requires every listed label before an active issue can be dispatched.
 - `tracker.terminal_states` controls what counts as complete for cleanup.
 - `issue.id` is the raw GitHub issue number.
 - `issue.identifier` is a route-safe identifier such as `github-xuelongmu-symphony-12`.
@@ -136,10 +139,11 @@ Opening `/api/v1/refresh` directly in a browser sends `GET`, so it will not trig
 To queue a real issue:
 
 1. Create a GitHub issue in the configured repository.
-2. Add it to the configured Project v2.
-3. Set its project `Status` to one of `tracker.active_states`, for example `Ready`.
-4. Wait for the next poll or call `POST /api/v1/refresh`.
-5. Watch the dashboard.
+2. Add the `symphony` label, if `tracker.required_labels` uses that recommended gate.
+3. Add it to the configured Project v2.
+4. Set its project `Status` to one of `tracker.active_states`, for example `Ready`.
+5. Wait for the next poll or call `POST /api/v1/refresh`.
+6. Watch the dashboard.
 
 When Symphony dispatches the issue, it:
 
@@ -208,11 +212,26 @@ For initial testing, use:
 tracker:
   active_states:
     - Ready
+  required_labels:
+    - symphony
 agent:
   max_concurrent_agents: 1
 ```
 
-Then only move one disposable issue to `Ready`. This gives a controlled end-to-end run without picking up unrelated project items.
+Then label and move one disposable issue to `Ready`. This gives a controlled end-to-end run without picking up unrelated project items.
+
+For a production board where humans also use `Ready` and `In progress`, use the label as the ownership gate:
+
+```yaml
+tracker:
+  active_states:
+    - Ready
+    - In progress
+  required_labels:
+    - symphony
+```
+
+Issues without the `symphony` label remain manually owned even if their Project status is active. If a running issue loses the required label, Symphony stops and releases its active worker on the next refresh.
 
 For a busier production loop, broaden `active_states` only after the prompt and status transitions are reliable.
 
@@ -223,6 +242,7 @@ No active sessions:
 - Confirm the issue is in the configured Project v2.
 - Confirm the project field name matches `tracker.project_status_field`.
 - Confirm the field option is in `tracker.active_states`.
+- If `tracker.required_labels` is set, confirm the issue has every required label.
 - Call `POST /api/v1/refresh`.
 - Check the terminal logs for GitHub API errors.
 

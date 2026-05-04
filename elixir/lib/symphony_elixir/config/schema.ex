@@ -80,6 +80,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
+      field(:required_labels, {:array, :string}, default: [])
       embeds_one(:github, Github, on_replace: :update, defaults_to_struct: true)
     end
 
@@ -101,7 +102,8 @@ defmodule SymphonyElixir.Config.Schema do
           :project_status_field,
           :assignee,
           :active_states,
-          :terminal_states
+          :terminal_states,
+          :required_labels
         ],
         empty_values: []
       )

@@ -879,15 +879,6 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
-  defp sync_workpad_error_payload(reason) do
-    %{
-      "error" => %{
-        "message" => "sync_workpad failed.",
-        "reason" => inspect(reason)
-      }
-    }
-  end
-
   defp supported_tool_names do
     Enum.map(tool_specs(), & &1["name"])
   end

@@ -309,6 +309,21 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute issue.assigned_to_worker
   end
 
+  test "config parses tracker required labels and defaults to none" do
+    assert {:ok, settings} = Schema.parse(%{tracker: %{kind: "memory"}})
+    assert settings.tracker.required_labels == []
+
+    assert {:ok, settings} =
+             Schema.parse(%{
+               tracker: %{
+                 kind: "github",
+                 required_labels: ["symphony", "agent-owned"]
+               }
+             })
+
+    assert settings.tracker.required_labels == ["symphony", "agent-owned"]
+  end
+
   test "linear client normalizes blockers from inverse relations" do
     raw_issue = %{
       "id" => "issue-1",
@@ -670,6 +685,74 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "default empty required labels keep active unlabeled issues dispatch-eligible" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "unlabeled-1",
+      identifier: "MT-1008",
+      title: "Unlabeled active work",
+      state: "In Progress",
+      labels: []
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "active issue with required label dispatches with trimmed case-insensitive matching" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: [" symphony "])
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "labeled-1",
+      identifier: "MT-1009",
+      title: "Labeled active work",
+      state: "In Progress",
+      labels: ["  SyMpHoNy  "]
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "active issue without required label is not dispatch-eligible" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: ["symphony", "agent-owned"])
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "manual-1",
+      identifier: "MT-1010",
+      title: "Manual active work",
+      state: "In Progress",
+      labels: ["manual"]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+
+    partially_labeled_issue = %{issue | id: "manual-2", labels: ["symphony"]}
+
+    refute Orchestrator.should_dispatch_issue_for_test(partially_labeled_issue, state)
+  end
+
   test "active issue with terminal blockers remains dispatch-eligible" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
@@ -714,6 +797,81 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert skipped_issue.identifier == "MT-1005"
     assert skipped_issue.blocked_by == [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
+  end
+
+  test "dispatch revalidation skips stale active issue once required label is removed" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: ["symphony"])
+
+    stale_issue = %Issue{
+      id: "label-stale-1",
+      identifier: "MT-1011",
+      title: "Stale labeled work",
+      state: "In Progress",
+      labels: ["symphony"]
+    }
+
+    refreshed_issue = %Issue{
+      id: "label-stale-1",
+      identifier: "MT-1011",
+      title: "Stale labeled work",
+      state: "In Progress",
+      labels: []
+    }
+
+    fetcher = fn ["label-stale-1"] -> {:ok, [refreshed_issue]} end
+
+    assert {:skip, %Issue{} = skipped_issue} =
+             Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
+
+    assert skipped_issue.identifier == "MT-1011"
+    assert skipped_issue.labels == []
+  end
+
+  test "reconcile stops and releases running issue when required label is removed" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_required_labels: ["symphony"])
+
+    issue_id = "label-running-1"
+
+    agent_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    state = %Orchestrator.State{
+      running: %{
+        issue_id => %{
+          pid: agent_pid,
+          ref: nil,
+          identifier: "MT-1012",
+          issue: %Issue{
+            id: issue_id,
+            identifier: "MT-1012",
+            state: "In Progress",
+            labels: ["symphony"]
+          },
+          started_at: DateTime.utc_now()
+        }
+      },
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-1012",
+      title: "No longer owned",
+      state: "In Progress",
+      labels: []
+    }
+
+    updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+    refute Map.has_key?(updated_state.running, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    refute Process.alive?(agent_pid)
   end
 
   test "workspace remove returns error information for missing directory" do

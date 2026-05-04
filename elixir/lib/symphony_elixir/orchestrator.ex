@@ -289,7 +289,8 @@ defmodule SymphonyElixir.Orchestrator do
           |> reconcile_running_issue_states(
             state,
             active_state_set(),
-            terminal_state_set()
+            terminal_state_set(),
+            required_label_names()
           )
           |> reconcile_missing_running_issue_ids(running_ids, issues)
 
@@ -304,17 +305,17 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec reconcile_issue_states_for_test([Issue.t()], term()) :: term()
   def reconcile_issue_states_for_test(issues, %State{} = state) when is_list(issues) do
-    reconcile_running_issue_states(issues, state, active_state_set(), terminal_state_set())
+    reconcile_running_issue_states(issues, state, active_state_set(), terminal_state_set(), required_label_names())
   end
 
   def reconcile_issue_states_for_test(issues, state) when is_list(issues) do
-    reconcile_running_issue_states(issues, state, active_state_set(), terminal_state_set())
+    reconcile_running_issue_states(issues, state, active_state_set(), terminal_state_set(), required_label_names())
   end
 
   @doc false
   @spec should_dispatch_issue_for_test(Issue.t(), term()) :: boolean()
   def should_dispatch_issue_for_test(%Issue{} = issue, %State{} = state) do
-    should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set())
+    should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set(), required_label_names())
   end
 
   @doc false
@@ -322,7 +323,7 @@ defmodule SymphonyElixir.Orchestrator do
           {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
   def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher)
       when is_function(issue_fetcher, 1) do
-    revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set())
+    revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set(), required_label_names())
   end
 
   @doc false
@@ -349,18 +350,19 @@ defmodule SymphonyElixir.Orchestrator do
     dispatch_issue(state, issue)
   end
 
-  defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
+  defp reconcile_running_issue_states([], state, _active_states, _terminal_states, _required_labels), do: state
 
-  defp reconcile_running_issue_states([issue | rest], state, active_states, terminal_states) do
+  defp reconcile_running_issue_states([issue | rest], state, active_states, terminal_states, required_labels) do
     reconcile_running_issue_states(
       rest,
-      reconcile_issue_state(issue, state, active_states, terminal_states),
+      reconcile_issue_state(issue, state, active_states, terminal_states, required_labels),
       active_states,
-      terminal_states
+      terminal_states,
+      required_labels
     )
   end
 
-  defp reconcile_issue_state(%Issue{} = issue, state, active_states, terminal_states) do
+  defp reconcile_issue_state(%Issue{} = issue, state, active_states, terminal_states, required_labels) do
     state = clear_review_round_unless_review_state(state, issue)
 
     cond do
@@ -371,6 +373,11 @@ defmodule SymphonyElixir.Orchestrator do
 
       !issue_routable_to_worker?(issue) ->
         Logger.info("Issue no longer routed to this worker: #{issue_context(issue)} assignee=#{inspect(issue.assignee_id)}; stopping active agent")
+
+        terminate_running_issue(state, issue.id, false)
+
+      active_issue_state?(issue.state, active_states) and !issue_has_required_labels?(issue, required_labels) ->
+        Logger.info("Issue no longer has required labels: #{issue_context(issue)} required_labels=#{inspect(required_labels)}; stopping active agent")
 
         terminate_running_issue(state, issue.id, false)
 
@@ -388,7 +395,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp reconcile_issue_state(_issue, state, _active_states, _terminal_states), do: state
+  defp reconcile_issue_state(_issue, state, _active_states, _terminal_states, _required_labels), do: state
 
   defp reconcile_missing_running_issue_ids(%State{} = state, requested_issue_ids, issues)
        when is_list(requested_issue_ids) and is_list(issues) do
@@ -544,11 +551,12 @@ defmodule SymphonyElixir.Orchestrator do
   defp choose_issues(issues, state) do
     active_states = active_state_set()
     terminal_states = terminal_state_set()
+    required_labels = required_label_names()
 
     issues
     |> sort_issues_for_dispatch()
     |> Enum.reduce(state, fn issue, state_acc ->
-      if should_dispatch_issue?(issue, state_acc, active_states, terminal_states) do
+      if should_dispatch_issue?(issue, state_acc, active_states, terminal_states, required_labels) do
         dispatch_issue(state_acc, issue)
       else
         state_acc
@@ -580,9 +588,10 @@ defmodule SymphonyElixir.Orchestrator do
          %Issue{} = issue,
          %State{running: running, claimed: claimed} = state,
          active_states,
-         terminal_states
+         terminal_states,
+         required_labels
        ) do
-    candidate_issue?(issue, active_states, terminal_states) and
+    candidate_issue?(issue, active_states, terminal_states, required_labels) and
       !issue_blocked_by_non_terminal?(issue, terminal_states) and
       !MapSet.member?(claimed, issue.id) and
       !Map.has_key?(running, issue.id) and
@@ -591,7 +600,7 @@ defmodule SymphonyElixir.Orchestrator do
       worker_slots_available?(state)
   end
 
-  defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states), do: false
+  defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states, _required_labels), do: false
 
   defp state_slots_available?(%Issue{state: issue_state}, running) when is_map(running) do
     limit = Config.max_concurrent_agents_for_state(issue_state)
@@ -621,15 +630,17 @@ defmodule SymphonyElixir.Orchestrator do
            state: state_name
          } = issue,
          active_states,
-         terminal_states
+         terminal_states,
+         required_labels
        )
        when is_binary(id) and is_binary(identifier) and is_binary(title) and is_binary(state_name) do
     issue_routable_to_worker?(issue) and
       active_issue_state?(state_name, active_states) and
-      !terminal_issue_state?(state_name, terminal_states)
+      !terminal_issue_state?(state_name, terminal_states) and
+      issue_has_required_labels?(issue, required_labels)
   end
 
-  defp candidate_issue?(_issue, _active_states, _terminal_states), do: false
+  defp candidate_issue?(_issue, _active_states, _terminal_states, _required_labels), do: false
 
   defp issue_routable_to_worker?(%Issue{assigned_to_worker: assigned_to_worker})
        when is_boolean(assigned_to_worker),
@@ -649,6 +660,15 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+
+  defp issue_has_required_labels?(_issue, []), do: true
+
+  defp issue_has_required_labels?(%Issue{labels: labels}, required_labels) when is_list(labels) do
+    issue_labels = normalized_label_names(labels)
+    Enum.all?(required_labels, &(&1 in issue_labels))
+  end
+
+  defp issue_has_required_labels?(_issue, _required_labels), do: false
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
@@ -678,8 +698,36 @@ defmodule SymphonyElixir.Orchestrator do
     |> MapSet.new()
   end
 
+  defp required_label_names do
+    Config.settings!().tracker.required_labels
+    |> normalized_label_names()
+  end
+
+  defp normalized_label_names(labels) when is_list(labels) do
+    labels
+    |> Enum.flat_map(fn
+      label when is_binary(label) -> [normalize_label_name(label)]
+      _ -> []
+    end)
+    |> Enum.filter(&(&1 != ""))
+    |> Enum.uniq()
+  end
+
+  defp normalized_label_names(_labels), do: []
+
+  defp normalize_label_name(label) when is_binary(label) do
+    label
+    |> String.trim()
+    |> String.downcase()
+  end
+
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
-    case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
+    case revalidate_issue_for_dispatch(
+           issue,
+           &Tracker.fetch_issue_states_by_ids/1,
+           terminal_state_set(),
+           required_label_names()
+         ) do
       {:ok, %Issue{} = refreshed_issue} ->
         maybe_dispatch_or_handoff_review_limit(state, refreshed_issue, attempt, preferred_worker_host)
 
@@ -849,11 +897,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
+  defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states, required_labels)
        when is_binary(issue_id) and is_function(issue_fetcher, 1) do
     case issue_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
-        if retry_candidate_issue?(refreshed_issue, terminal_states) do
+        if retry_candidate_issue?(refreshed_issue, terminal_states, required_labels) do
           {:ok, refreshed_issue}
         else
           {:skip, refreshed_issue}
@@ -867,7 +915,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
+  defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _required_labels), do: {:ok, issue}
 
   defp complete_issue(%State{} = state, issue_id) do
     %{
@@ -955,6 +1003,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_retry_issue_lookup(%Issue{} = issue, state, issue_id, attempt, metadata) do
     terminal_states = terminal_state_set()
+    required_labels = required_label_names()
     state = clear_review_round_unless_review_state(state, issue)
 
     cond do
@@ -964,7 +1013,7 @@ defmodule SymphonyElixir.Orchestrator do
         cleanup_issue_workspace(issue.identifier, metadata[:worker_host])
         {:noreply, release_issue_claim(state, issue_id)}
 
-      retry_candidate_issue?(issue, terminal_states) ->
+      retry_candidate_issue?(issue, terminal_states, required_labels) ->
         handle_active_retry(state, issue, attempt, metadata)
 
       true ->
@@ -1009,7 +1058,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_active_retry(state, issue, attempt, metadata) do
-    if retry_candidate_issue?(issue, terminal_state_set()) and
+    if retry_candidate_issue?(issue, terminal_state_set(), required_label_names()) and
          dispatch_slots_available?(issue, state) and
          worker_slots_available?(state, metadata[:worker_host]) do
       {:noreply, dispatch_issue(state, issue, attempt, metadata[:worker_host])}
@@ -1412,8 +1461,8 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-  defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
-    candidate_issue?(issue, active_state_set(), terminal_states) and
+  defp retry_candidate_issue?(%Issue{} = issue, terminal_states, required_labels) do
+    candidate_issue?(issue, active_state_set(), terminal_states, required_labels) and
       !issue_blocked_by_non_terminal?(issue, terminal_states)
   end
 

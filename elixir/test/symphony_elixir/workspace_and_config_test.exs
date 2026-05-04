@@ -334,7 +334,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              Schema.parse(%{
                tracker: %{
                  kind: "github",
-                 current_iteration: %{field: nil, states: ["Ready"]}
+                 current_iteration: %{field: "", states: ["Ready"]}
                }
              })
 

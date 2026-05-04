@@ -249,7 +249,7 @@ defmodule SymphonyElixir.CoreTest do
 
     updated_state = Orchestrator.dispatch_issue_for_test(state, issue)
 
-    assert_receive {:memory_tracker_state_update, "issue-review-cap", "Human Review"}
+    assert_receive {:memory_tracker_state_update, "issue-review-cap", "Needs Human"}
     refute Map.has_key?(updated_state.running, issue.id)
     refute Map.has_key?(updated_state.review_rounds, issue.id)
     refute MapSet.member?(updated_state.claimed, issue.id)

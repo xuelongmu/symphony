@@ -272,7 +272,7 @@ Notes:
 - `review.enabled` enables the automated `Agent Review` role/state loop. Review agents inspect and
   route PRs but do not make implementation changes.
 - `review.max_rounds` caps automated review-agent dispatches before Symphony hands the issue to
-  `Human Review`. Default: `3`.
+  `Needs Human`. Default: `3`.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, agent role, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run

@@ -14,7 +14,7 @@ defmodule SymphonyElixir.Orchestrator do
   @failure_retry_base_ms 10_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
-  @human_review_state "Human Review"
+  @human_review_state "Needs Human"
   @empty_codex_totals %{
     input_tokens: 0,
     output_tokens: 0,

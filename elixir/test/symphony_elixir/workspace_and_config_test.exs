@@ -327,6 +327,17 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert settings.tracker.required_labels == ["symphony", "agent-owned"]
     assert settings.tracker.current_iteration.field == "Iteration"
     assert settings.tracker.current_iteration.states == ["Ready"]
+
+    assert {:ok, settings} =
+             Schema.parse(%{
+               tracker: %{
+                 kind: "github",
+                 current_iteration: %{field: "", states: []}
+               }
+             })
+
+    assert settings.tracker.current_iteration.field == ""
+    assert settings.tracker.current_iteration.states == []
   end
 
   test "config requires current iteration field when gate states are enabled" do

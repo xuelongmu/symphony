@@ -14,6 +14,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
       socket
       |> assign(:payload, load_payload())
       |> assign(:now, DateTime.utc_now())
+      |> assign(:operator_notice, nil)
 
     if connected?(socket) do
       :ok = ObservabilityPubSub.subscribe()
@@ -35,6 +36,33 @@ defmodule SymphonyElixirWeb.DashboardLive do
      socket
      |> assign(:payload, load_payload())
      |> assign(:now, DateTime.utc_now())}
+  end
+
+  @impl true
+  def handle_event("stop-session", %{"identifier" => issue_identifier}, socket) do
+    now = DateTime.utc_now()
+
+    case Presenter.stop_session_payload(issue_identifier, orchestrator()) do
+      {:ok, payload} ->
+        {:noreply,
+         socket
+         |> assign(:payload, load_payload())
+         |> assign(:now, now)
+         |> assign(:operator_notice, %{kind: "success", message: "Stopped session #{payload.issue_identifier || issue_identifier}"})}
+
+      {:error, :issue_not_found} ->
+        {:noreply,
+         socket
+         |> assign(:payload, load_payload())
+         |> assign(:now, now)
+         |> assign(:operator_notice, %{kind: "error", message: "Session not found for #{issue_identifier}"})}
+
+      {:error, :unavailable} ->
+        {:noreply,
+         socket
+         |> assign(:now, now)
+         |> assign(:operator_notice, %{kind: "error", message: "Orchestrator unavailable; session was not stopped"})}
+    end
   end
 
   @impl true
@@ -67,6 +95,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </div>
         </div>
       </header>
+
+      <%= if @operator_notice do %>
+        <section class={"operator-notice operator-notice-#{@operator_notice.kind}"}>
+          <%= @operator_notice.message %>
+        </section>
+      <% end %>
 
       <%= if @payload[:error] do %>
         <section class="error-card">
@@ -152,8 +186,31 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <tr :for={entry <- @payload.running}>
                     <td>
                       <div class="issue-stack">
-                        <span class="issue-id"><%= entry.issue_identifier %></span>
-                        <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        <%= if tracker_url(entry) do %>
+                          <a
+                            class="issue-id issue-anchor"
+                            href={tracker_url(entry)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <%= entry.issue_identifier %>
+                          </a>
+                        <% else %>
+                          <span class="issue-id"><%= entry.issue_identifier %></span>
+                        <% end %>
+                        <span class="issue-links">
+                          <%= if tracker_url(entry) do %>
+                            <a
+                              class="issue-link issue-link-primary"
+                              href={tracker_url(entry)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <%= tracker_link_label(tracker_url(entry)) %>
+                            </a>
+                          <% end %>
+                          <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        </span>
                       </div>
                     </td>
                     <td>
@@ -172,6 +229,15 @@ defmodule SymphonyElixirWeb.DashboardLive do
                             onclick="navigator.clipboard.writeText(this.dataset.copy); this.textContent = 'Copied'; clearTimeout(this._copyTimer); this._copyTimer = setTimeout(() => { this.textContent = this.dataset.label }, 1200);"
                           >
                             Copy ID
+                          </button>
+                          <button
+                            type="button"
+                            class="subtle-button danger-button"
+                            phx-click="stop-session"
+                            phx-value-identifier={entry.issue_identifier}
+                            onclick="return confirm('Stop this session?');"
+                          >
+                            Stop
                           </button>
                         <% else %>
                           <span class="muted">n/a</span>
@@ -231,13 +297,137 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <tr :for={entry <- @payload.retrying}>
                     <td>
                       <div class="issue-stack">
-                        <span class="issue-id"><%= entry.issue_identifier %></span>
-                        <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        <%= if tracker_url(entry) do %>
+                          <a
+                            class="issue-id issue-anchor"
+                            href={tracker_url(entry)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <%= entry.issue_identifier %>
+                          </a>
+                        <% else %>
+                          <span class="issue-id"><%= entry.issue_identifier %></span>
+                        <% end %>
+                        <span class="issue-links">
+                          <%= if tracker_url(entry) do %>
+                            <a
+                              class="issue-link issue-link-primary"
+                              href={tracker_url(entry)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <%= tracker_link_label(tracker_url(entry)) %>
+                            </a>
+                          <% end %>
+                          <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        </span>
                       </div>
                     </td>
                     <td><%= entry.attempt %></td>
                     <td class="mono"><%= entry.due_at || "n/a" %></td>
                     <td><%= entry.error || "n/a" %></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Past sessions</h2>
+              <p class="section-copy">Recent completed, failed, and stopped agent sessions.</p>
+            </div>
+          </div>
+
+          <%= if @payload.past_sessions == [] do %>
+            <p class="empty-state">No past sessions in memory.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table" style="min-width: 980px;">
+                <colgroup>
+                  <col style="width: 12rem;" />
+                  <col style="width: 7rem;" />
+                  <col style="width: 10rem;" />
+                  <col style="width: 8.5rem;" />
+                  <col style="width: 12rem;" />
+                  <col />
+                  <col style="width: 10rem;" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>Status</th>
+                    <th>Session</th>
+                    <th>Runtime / turns</th>
+                    <th>Ended</th>
+                    <th>Last update</th>
+                    <th>Tokens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- @payload.past_sessions}>
+                    <td>
+                      <div class="issue-stack">
+                        <%= if tracker_url(entry) do %>
+                          <a
+                            class="issue-id issue-anchor"
+                            href={tracker_url(entry)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <%= entry.issue_identifier %>
+                          </a>
+                        <% else %>
+                          <span class="issue-id"><%= entry.issue_identifier %></span>
+                        <% end %>
+                        <span class="issue-links">
+                          <%= if tracker_url(entry) do %>
+                            <a
+                              class="issue-link issue-link-primary"
+                              href={tracker_url(entry)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <%= tracker_link_label(tracker_url(entry)) %>
+                            </a>
+                          <% end %>
+                          <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class={state_badge_class(entry.status)}>
+                        <%= entry.status || "ended" %>
+                      </span>
+                    </td>
+                    <td>
+                      <span class="mono numeric"><%= compact_session_id(entry.session_id) %></span>
+                    </td>
+                    <td class="numeric"><%= format_past_runtime_and_turns(entry.runtime_seconds, entry.turn_count) %></td>
+                    <td class="mono numeric"><%= entry.ended_at || "n/a" %></td>
+                    <td>
+                      <div class="detail-stack">
+                        <span
+                          class="event-text"
+                          title={entry.reason || entry.last_message || to_string(entry.last_event || "n/a")}
+                        ><%= entry.reason || entry.last_message || to_string(entry.last_event || "n/a") %></span>
+                        <span class="muted event-meta">
+                          <%= entry.last_event || "n/a" %>
+                          <%= if entry.last_event_at do %>
+                            · <span class="mono numeric"><%= entry.last_event_at %></span>
+                          <% end %>
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="token-stack numeric">
+                        <span>Total: <%= format_int(entry.tokens.total_tokens) %></span>
+                        <span class="muted">In <%= format_int(entry.tokens.input_tokens) %> / Out <%= format_int(entry.tokens.output_tokens) %></span>
+                      </div>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -279,6 +469,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp format_runtime_and_turns(started_at, _turn_count, now),
     do: format_runtime_seconds(runtime_seconds_from_started_at(started_at, now))
 
+  defp format_past_runtime_and_turns(seconds, turn_count) when is_integer(turn_count) and turn_count > 0 do
+    "#{format_runtime_seconds(seconds)} / #{turn_count}"
+  end
+
+  defp format_past_runtime_and_turns(seconds, _turn_count), do: format_runtime_seconds(seconds)
+
   defp format_runtime_seconds(seconds) when is_number(seconds) do
     whole_seconds = max(trunc(seconds), 0)
     mins = div(whole_seconds, 60)
@@ -314,12 +510,54 @@ defmodule SymphonyElixirWeb.DashboardLive do
     normalized = state |> to_string() |> String.downcase()
 
     cond do
-      String.contains?(normalized, ["progress", "running", "active"]) -> "#{base} state-badge-active"
-      String.contains?(normalized, ["blocked", "error", "failed"]) -> "#{base} state-badge-danger"
-      String.contains?(normalized, ["todo", "queued", "pending", "retry"]) -> "#{base} state-badge-warning"
-      true -> base
+      String.contains?(normalized, ["progress", "running", "active", "completed", "success"]) ->
+        "#{base} state-badge-active"
+
+      String.contains?(normalized, ["blocked", "error", "failed"]) ->
+        "#{base} state-badge-danger"
+
+      String.contains?(normalized, ["todo", "queued", "pending", "retry", "stopped"]) ->
+        "#{base} state-badge-warning"
+
+      true ->
+        base
     end
   end
+
+  defp compact_session_id(nil), do: "n/a"
+  defp compact_session_id(session_id) when not is_binary(session_id), do: "n/a"
+
+  defp compact_session_id(session_id) do
+    if String.length(session_id) > 16 do
+      String.slice(session_id, 0, 6) <> "..." <> String.slice(session_id, -6, 6)
+    else
+      session_id
+    end
+  end
+
+  defp tracker_url(entry) do
+    case Map.get(entry, :tracker_url) do
+      url when is_binary(url) ->
+        trimmed = String.trim(url)
+        if trimmed == "", do: nil, else: trimmed
+
+      _ ->
+        nil
+    end
+  end
+
+  defp tracker_link_label(url) when is_binary(url) do
+    normalized = String.downcase(url)
+
+    cond do
+      String.contains?(normalized, "github.com") and String.contains?(normalized, "/pull/") -> "GitHub PR"
+      String.contains?(normalized, "github.com") and String.contains?(normalized, "/issues/") -> "GitHub issue"
+      String.contains?(normalized, "linear.app") -> "Linear issue"
+      true -> "Tracker"
+    end
+  end
+
+  defp tracker_link_label(_url), do: "Tracker"
 
   defp schedule_runtime_tick do
     Process.send_after(self(), :runtime_tick, @runtime_tick_ms)

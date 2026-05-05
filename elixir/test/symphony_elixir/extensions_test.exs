@@ -113,6 +113,56 @@ defmodule SymphonyElixir.ExtensionsTest do
     def handle_call(:request_refresh, _from, state) do
       {:reply, Keyword.get(state, :refresh, :unavailable), state}
     end
+
+    def handle_call({:stop_issue_session, issue_identifier}, _from, state) do
+      snapshot = Keyword.fetch!(state, :snapshot)
+
+      case running_entry_for_identifier(snapshot, issue_identifier) do
+        nil ->
+          {:reply, {:error, :not_found}, state}
+
+        running_entry ->
+          payload = stop_payload(running_entry)
+          {:reply, {:ok, payload}, stop_state(state, snapshot, running_entry, payload)}
+      end
+    end
+
+    defp running_entry_for_identifier(snapshot, issue_identifier) do
+      Enum.find(snapshot.running, &(&1.identifier == issue_identifier))
+    end
+
+    defp stop_state(state, snapshot, running_entry, payload) do
+      past_session = past_session(running_entry, payload.stopped_at)
+
+      updated_snapshot =
+        snapshot
+        |> Map.update!(:running, fn entries -> Enum.reject(entries, &(&1.identifier == running_entry.identifier)) end)
+        |> Map.update(:past_sessions, [past_session], &[past_session | &1])
+
+      Keyword.put(state, :snapshot, updated_snapshot)
+    end
+
+    defp stop_payload(running_entry) do
+      %{
+        stopped: true,
+        issue_id: running_entry.issue_id,
+        issue_identifier: running_entry.identifier,
+        tracker_url: Map.get(running_entry, :issue_url),
+        session_id: running_entry.session_id,
+        worker_host: Map.get(running_entry, :worker_host),
+        workspace_path: Map.get(running_entry, :workspace_path),
+        stopped_at: DateTime.utc_now()
+      }
+    end
+
+    defp past_session(running_entry, stopped_at) do
+      Map.merge(running_entry, %{
+        status: "stopped",
+        reason: nil,
+        ended_at: stopped_at,
+        runtime_seconds: 12
+      })
+    end
   end
 
   setup do
@@ -412,11 +462,12 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
-             "counts" => %{"running" => 1, "retrying" => 1},
+             "counts" => %{"running" => 1, "retrying" => 1, "past_sessions" => 1},
              "running" => [
                %{
                  "issue_id" => "issue-http",
                  "issue_identifier" => "MT-HTTP",
+                 "tracker_url" => "https://linear.app/acme/issue/MT-HTTP/render-dashboard",
                  "state" => "In Progress",
                  "worker_host" => nil,
                  "workspace_path" => nil,
@@ -433,11 +484,33 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{
                  "issue_id" => "issue-retry",
                  "issue_identifier" => "MT-RETRY",
+                 "tracker_url" => "https://github.com/acme/widget/pull/42",
                  "attempt" => 2,
                  "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
                  "error" => "boom",
                  "worker_host" => nil,
                  "workspace_path" => nil
+               }
+             ],
+             "past_sessions" => [
+               %{
+                 "issue_id" => "issue-past",
+                 "issue_identifier" => "MT-DONE",
+                 "tracker_url" => "https://github.com/acme/widget/issues/77",
+                 "state" => "Done",
+                 "status" => "completed",
+                 "reason" => nil,
+                 "worker_host" => nil,
+                 "workspace_path" => nil,
+                 "session_id" => "thread-done",
+                 "turn_count" => 3,
+                 "last_event" => "turn_completed",
+                 "last_message" => "turn completed (completed)",
+                 "started_at" => state_payload["past_sessions"] |> List.first() |> Map.fetch!("started_at"),
+                 "ended_at" => state_payload["past_sessions"] |> List.first() |> Map.fetch!("ended_at"),
+                 "last_event_at" => nil,
+                 "runtime_seconds" => 95,
+                 "tokens" => %{"input_tokens" => 20, "output_tokens" => 5, "total_tokens" => 25}
                }
              ],
              "codex_totals" => %{
@@ -455,6 +528,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert issue_payload == %{
              "issue_identifier" => "MT-HTTP",
              "issue_id" => "issue-http",
+             "tracker_url" => "https://linear.app/acme/issue/MT-HTTP/render-dashboard",
              "status" => "running",
              "workspace" => %{
                "path" => Path.join(Config.settings!().workspace.root, "MT-HTTP"),
@@ -464,6 +538,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "running" => %{
                "worker_host" => nil,
                "workspace_path" => nil,
+               "tracker_url" => "https://linear.app/acme/issue/MT-HTTP/render-dashboard",
                "session_id" => "thread-http",
                "turn_count" => 7,
                "state" => "In Progress",
@@ -478,6 +553,30 @@ defmodule SymphonyElixir.ExtensionsTest do
              "recent_events" => [],
              "last_error" => nil,
              "tracked" => %{}
+           }
+
+    conn = post(build_conn(), "/api/v1/MT-HTTP/stop", %{})
+    stop_payload = json_response(conn, 202)
+
+    assert stop_payload == %{
+             "stopped" => true,
+             "issue_id" => "issue-http",
+             "issue_identifier" => "MT-HTTP",
+             "tracker_url" => "https://linear.app/acme/issue/MT-HTTP/render-dashboard",
+             "session_id" => "thread-http",
+             "worker_host" => nil,
+             "workspace_path" => nil,
+             "stopped_at" => stop_payload["stopped_at"]
+           }
+
+    assert json_response(get(build_conn(), "/api/v1/state"), 200)["counts"] == %{
+             "running" => 0,
+             "retrying" => 1,
+             "past_sessions" => 2
+           }
+
+    assert json_response(post(build_conn(), "/api/v1/MT-MISSING/stop", %{}), 404) == %{
+             "error" => %{"code" => "issue_not_found", "message" => "Issue not found"}
            }
 
     conn = get(build_conn(), "/api/v1/MT-RETRY")
@@ -505,6 +604,9 @@ defmodule SymphonyElixir.ExtensionsTest do
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
 
     assert json_response(get(build_conn(), "/api/v1/refresh"), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+
+    assert json_response(get(build_conn(), "/api/v1/MT-1/stop"), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
 
     assert json_response(post(build_conn(), "/", %{}), 405) ==
@@ -617,7 +719,12 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Live"
     assert html =~ "Offline"
     assert html =~ "Copy ID"
+    assert html =~ "Stop"
     assert html =~ "Codex update"
+    assert html =~ "Past sessions"
+    assert html =~ "MT-DONE"
+    assert html =~ "Linear issue"
+    assert html =~ "GitHub PR"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"
@@ -630,6 +737,7 @@ defmodule SymphonyElixir.ExtensionsTest do
         %{
           issue_id: "issue-http",
           identifier: "MT-HTTP",
+          issue_url: "https://linear.app/acme/issue/MT-HTTP/render-dashboard",
           state: "In Progress",
           session_id: "thread-http",
           turn_count: 8,
@@ -711,7 +819,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     response = Req.get!("http://127.0.0.1:#{port}/api/v1/state")
     assert response.status == 200
-    assert response.body["counts"] == %{"running" => 1, "retrying" => 1}
+    assert response.body["counts"] == %{"running" => 1, "retrying" => 1, "past_sessions" => 1}
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200
@@ -754,11 +862,14 @@ defmodule SymphonyElixir.ExtensionsTest do
   end
 
   defp static_snapshot do
+    now = DateTime.utc_now()
+
     %{
       running: [
         %{
           issue_id: "issue-http",
           identifier: "MT-HTTP",
+          issue_url: "https://linear.app/acme/issue/MT-HTTP/render-dashboard",
           state: "In Progress",
           session_id: "thread-http",
           turn_count: 7,
@@ -769,16 +880,43 @@ defmodule SymphonyElixir.ExtensionsTest do
           codex_input_tokens: 4,
           codex_output_tokens: 8,
           codex_total_tokens: 12,
-          started_at: DateTime.utc_now()
+          started_at: now
         }
       ],
       retrying: [
         %{
           issue_id: "issue-retry",
           identifier: "MT-RETRY",
+          issue_url: "https://github.com/acme/widget/pull/42",
           attempt: 2,
           due_in_ms: 2_000,
           error: "boom"
+        }
+      ],
+      past_sessions: [
+        %{
+          issue_id: "issue-past",
+          identifier: "MT-DONE",
+          issue_url: "https://github.com/acme/widget/issues/77",
+          state: "Done",
+          status: "completed",
+          reason: nil,
+          session_id: "thread-done",
+          worker_host: nil,
+          workspace_path: nil,
+          turn_count: 3,
+          last_codex_event: "turn_completed",
+          last_codex_message: %{
+            event: :notification,
+            message: %{"method" => "turn/completed", "params" => %{"turn" => %{"status" => "completed"}}}
+          },
+          last_codex_timestamp: nil,
+          codex_input_tokens: 20,
+          codex_output_tokens: 5,
+          codex_total_tokens: 25,
+          started_at: DateTime.add(now, -100, :second),
+          ended_at: DateTime.add(now, -5, :second),
+          runtime_seconds: 95
         }
       ],
       codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},

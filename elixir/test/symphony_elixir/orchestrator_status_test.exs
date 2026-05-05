@@ -90,6 +90,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     snapshot = GenServer.call(pid, :snapshot)
     assert %{running: [snapshot_entry]} = snapshot
     assert snapshot_entry.issue_id == issue_id
+    assert snapshot_entry.issue_url == "https://example.org/issues/MT-188"
     assert snapshot_entry.session_id == "thread-live-turn-live"
     assert snapshot_entry.turn_count == 1
     assert snapshot_entry.last_codex_timestamp == now
@@ -99,6 +100,78 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              message: %{method: "some-event"},
              timestamp: now
            }
+  end
+
+  test "orchestrator can stop a running issue session by identifier" do
+    issue_id = "issue-stop"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-STOP",
+      title: "Stop test",
+      description: "Stop active session",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-STOP"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :StopSessionOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    agent_pid =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
+
+    agent_ref = Process.monitor(agent_pid)
+    started_at = DateTime.add(DateTime.utc_now(), -30, :second)
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: agent_pid,
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-stop-turn-stop",
+      worker_host: nil,
+      workspace_path: nil,
+      codex_input_tokens: 10,
+      codex_output_tokens: 5,
+      codex_total_tokens: 15,
+      started_at: started_at
+    }
+
+    state_with_issue =
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+
+    :sys.replace_state(pid, fn _ -> state_with_issue end)
+
+    assert {:ok, payload} = Orchestrator.stop_issue_session(orchestrator_name, "MT-STOP")
+    assert payload.stopped == true
+    assert payload.issue_id == issue_id
+    assert payload.issue_identifier == "MT-STOP"
+    assert payload.tracker_url == "https://example.org/issues/MT-STOP"
+    assert payload.session_id == "thread-stop-turn-stop"
+    assert %DateTime{} = payload.stopped_at
+
+    assert_receive {:DOWN, ^agent_ref, :process, ^agent_pid, _reason}, 1_000
+
+    snapshot = GenServer.call(pid, :snapshot)
+    assert snapshot.running == []
+    assert [%{identifier: "MT-STOP", status: "stopped", session_id: "thread-stop-turn-stop"}] = snapshot.past_sessions
+    refute MapSet.member?(:sys.get_state(pid).claimed, issue_id)
+    assert snapshot.codex_totals.seconds_running >= 30
+
+    assert {:error, :not_found} = Orchestrator.stop_issue_session(orchestrator_name, "MT-STOP")
   end
 
   test "orchestrator snapshot tracks codex thread totals and app-server pid" do
@@ -728,6 +801,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       timer_ref: nil,
       due_at_ms: System.monotonic_time(:millisecond) + 5_000,
       identifier: "MT-500",
+      issue_url: "https://example.org/issues/MT-500",
       error: "agent exited: :boom"
     }
 
@@ -744,6 +818,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                attempt: 2,
                due_in_ms: due_in_ms,
                identifier: "MT-500",
+               issue_url: "https://example.org/issues/MT-500",
                error: "agent exited: :boom"
              }
            ] = snapshot.retrying

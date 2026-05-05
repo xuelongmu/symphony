@@ -158,7 +158,10 @@ The dashboard shows:
 
 - Active sessions.
 - Current issue state.
+- Direct tracker links for each session when available, including Linear issues, GitHub issues, or GitHub PRs.
 - Session id.
+- Stop controls for active sessions.
+- Recent past sessions.
 - Runtime and turn count.
 - Latest Codex event.
 - Token totals.

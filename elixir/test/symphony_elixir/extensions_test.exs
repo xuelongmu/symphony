@@ -785,6 +785,24 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "snapshot_unavailable"
   end
 
+  test "dashboard liveview renders stop action before session id arrives" do
+    orchestrator_name = Module.concat(__MODULE__, :DashboardNilSessionOrchestrator)
+
+    snapshot =
+      update_in(static_snapshot().running, fn [entry | rest] ->
+        [%{entry | session_id: nil} | rest]
+      end)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "MT-HTTP"
+    assert html =~ "n/a"
+    assert html =~ "Stop"
+    refute html =~ "Copy ID"
+  end
+
   test "http server serves embedded assets, accepts form posts, and rejects invalid hosts" do
     spec = HttpServer.child_spec(port: 0)
     assert spec.id == HttpServer

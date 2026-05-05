@@ -230,18 +230,18 @@ defmodule SymphonyElixirWeb.DashboardLive do
                           >
                             Copy ID
                           </button>
-                          <button
-                            type="button"
-                            class="subtle-button danger-button"
-                            phx-click="stop-session"
-                            phx-value-identifier={entry.issue_identifier}
-                            onclick="return confirm('Stop this session?');"
-                          >
-                            Stop
-                          </button>
                         <% else %>
                           <span class="muted">n/a</span>
                         <% end %>
+                        <button
+                          type="button"
+                          class="subtle-button danger-button"
+                          phx-click="stop-session"
+                          phx-value-identifier={entry.issue_identifier}
+                          onclick="return confirm('Stop this session?');"
+                        >
+                          Stop
+                        </button>
                       </div>
                     </td>
                     <td class="numeric"><%= format_runtime_and_turns(entry.started_at, entry.turn_count, @now) %></td>

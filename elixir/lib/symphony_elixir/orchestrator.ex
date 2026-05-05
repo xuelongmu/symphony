@@ -1387,7 +1387,11 @@ defmodule SymphonyElixir.Orchestrator do
   @spec stop_issue_session(GenServer.server(), String.t()) :: {:ok, map()} | {:error, :not_found} | :unavailable
   def stop_issue_session(server, issue_identifier) when is_binary(issue_identifier) do
     if Process.whereis(server) do
-      GenServer.call(server, {:stop_issue_session, issue_identifier})
+      try do
+        GenServer.call(server, {:stop_issue_session, issue_identifier})
+      catch
+        :exit, _reason -> :unavailable
+      end
     else
       :unavailable
     end

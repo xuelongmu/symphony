@@ -21,6 +21,23 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     send(pid, :stop)
   end
 
+  test "stop session returns unavailable when the orchestrator call exits" do
+    server_name = Module.concat(__MODULE__, :ExitingStopServer)
+    parent = self()
+
+    spawn(fn ->
+      Process.register(self(), server_name)
+      send(parent, :stop_server_ready)
+
+      receive do
+        {:"$gen_call", _from, {:stop_issue_session, "MT-EXIT"}} -> exit(:boom)
+      end
+    end)
+
+    assert_receive :stop_server_ready, 1_000
+    assert Orchestrator.stop_issue_session(server_name, "MT-EXIT") == :unavailable
+  end
+
   test "orchestrator snapshot reflects last codex update and session id" do
     issue_id = "issue-snapshot"
 

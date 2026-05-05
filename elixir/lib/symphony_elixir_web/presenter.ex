@@ -11,14 +11,18 @@ defmodule SymphonyElixirWeb.Presenter do
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
+        past_sessions = Map.get(snapshot, :past_sessions, [])
+
         %{
           generated_at: generated_at,
           counts: %{
             running: length(snapshot.running),
-            retrying: length(snapshot.retrying)
+            retrying: length(snapshot.retrying),
+            past_sessions: length(past_sessions)
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
+          past_sessions: Enum.map(past_sessions, &past_session_payload/1),
           codex_totals: snapshot.codex_totals,
           rate_limits: snapshot.rate_limits
         }
@@ -60,10 +64,26 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
+  @spec stop_session_payload(String.t(), GenServer.name()) ::
+          {:ok, map()} | {:error, :issue_not_found | :unavailable}
+  def stop_session_payload(issue_identifier, orchestrator) when is_binary(issue_identifier) do
+    case Orchestrator.stop_issue_session(orchestrator, issue_identifier) do
+      {:ok, payload} ->
+        {:ok, Map.update!(payload, :stopped_at, &DateTime.to_iso8601/1)}
+
+      {:error, :not_found} ->
+        {:error, :issue_not_found}
+
+      :unavailable ->
+        {:error, :unavailable}
+    end
+  end
+
   defp issue_payload_body(issue_identifier, running, retry) do
     %{
       issue_identifier: issue_identifier,
       issue_id: issue_id_from_entries(running, retry),
+      tracker_url: tracker_url_from_entries(running, retry),
       status: issue_status(running, retry),
       workspace: %{
         path: workspace_path(issue_identifier, running, retry),
@@ -87,6 +107,9 @@ defmodule SymphonyElixirWeb.Presenter do
   defp issue_id_from_entries(running, retry),
     do: (running && running.issue_id) || (retry && retry.issue_id)
 
+  defp tracker_url_from_entries(running, retry),
+    do: (running && Map.get(running, :issue_url)) || (retry && Map.get(retry, :issue_url))
+
   defp restart_count(retry), do: max(retry_attempt(retry) - 1, 0)
   defp retry_attempt(nil), do: 0
   defp retry_attempt(retry), do: retry.attempt || 0
@@ -99,6 +122,7 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
+      tracker_url: Map.get(entry, :issue_url),
       state: entry.state,
       worker_host: Map.get(entry, :worker_host),
       workspace_path: Map.get(entry, :workspace_path),
@@ -120,6 +144,7 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
+      tracker_url: Map.get(entry, :issue_url),
       attempt: entry.attempt,
       due_at: due_at_iso8601(entry.due_in_ms),
       error: entry.error,
@@ -128,10 +153,37 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
+  defp past_session_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.identifier,
+      tracker_url: Map.get(entry, :issue_url),
+      state: Map.get(entry, :state),
+      status: Map.get(entry, :status),
+      reason: Map.get(entry, :reason),
+      worker_host: Map.get(entry, :worker_host),
+      workspace_path: Map.get(entry, :workspace_path),
+      session_id: entry.session_id,
+      turn_count: Map.get(entry, :turn_count, 0),
+      last_event: entry.last_codex_event,
+      last_message: summarize_message(entry.last_codex_message),
+      started_at: iso8601(entry.started_at),
+      ended_at: iso8601(entry.ended_at),
+      last_event_at: iso8601(entry.last_codex_timestamp),
+      runtime_seconds: Map.get(entry, :runtime_seconds, 0),
+      tokens: %{
+        input_tokens: entry.codex_input_tokens,
+        output_tokens: entry.codex_output_tokens,
+        total_tokens: entry.codex_total_tokens
+      }
+    }
+  end
+
   defp running_issue_payload(running) do
     %{
       worker_host: Map.get(running, :worker_host),
       workspace_path: Map.get(running, :workspace_path),
+      tracker_url: Map.get(running, :issue_url),
       session_id: running.session_id,
       turn_count: Map.get(running, :turn_count, 0),
       state: running.state,
@@ -152,6 +204,7 @@ defmodule SymphonyElixirWeb.Presenter do
       attempt: retry.attempt,
       due_at: due_at_iso8601(retry.due_in_ms),
       error: retry.error,
+      tracker_url: Map.get(retry, :issue_url),
       worker_host: Map.get(retry, :worker_host),
       workspace_path: Map.get(retry, :workspace_path)
     }

@@ -15,6 +15,7 @@ defmodule SymphonyElixir.Orchestrator do
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @human_review_state "Human Review"
+  @session_history_limit 50
   @empty_codex_totals %{
     input_tokens: 0,
     output_tokens: 0,
@@ -40,6 +41,7 @@ defmodule SymphonyElixir.Orchestrator do
       completed: MapSet.new(),
       claimed: MapSet.new(),
       retry_attempts: %{},
+      past_sessions: [],
       review_rounds: %{},
       codex_totals: nil,
       codex_rate_limits: nil
@@ -139,9 +141,11 @@ defmodule SymphonyElixir.Orchestrator do
               Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
 
               state
+              |> record_past_session(issue_id, running_entry, "completed", nil)
               |> complete_issue(issue_id)
               |> schedule_issue_retry(issue_id, 1, %{
                 identifier: running_entry.identifier,
+                issue_url: running_entry_issue_url(running_entry),
                 delay_type: :continuation,
                 worker_host: Map.get(running_entry, :worker_host),
                 workspace_path: Map.get(running_entry, :workspace_path)
@@ -152,8 +156,11 @@ defmodule SymphonyElixir.Orchestrator do
 
               next_attempt = next_retry_attempt_from_running(running_entry)
 
-              schedule_issue_retry(state, issue_id, next_attempt, %{
+              state
+              |> record_past_session(issue_id, running_entry, "failed", "agent exited: #{inspect(reason)}")
+              |> schedule_issue_retry(issue_id, next_attempt, %{
                 identifier: running_entry.identifier,
+                issue_url: running_entry_issue_url(running_entry),
                 error: "agent exited: #{inspect(reason)}",
                 worker_host: Map.get(running_entry, :worker_host),
                 workspace_path: Map.get(running_entry, :workspace_path)
@@ -464,6 +471,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       %{pid: pid, ref: ref, identifier: identifier} = running_entry ->
         state = record_session_completion_totals(state, running_entry)
+        state = record_past_session(state, issue_id, running_entry, "stopped", nil)
         worker_host = Map.get(running_entry, :worker_host)
 
         if cleanup_workspace do
@@ -524,6 +532,7 @@ defmodule SymphonyElixir.Orchestrator do
       |> terminate_running_issue(issue_id, false)
       |> schedule_issue_retry(issue_id, next_attempt, %{
         identifier: identifier,
+        issue_url: running_entry_issue_url(running_entry),
         error: "stalled for #{elapsed_ms}ms without codex activity"
       })
     else
@@ -836,6 +845,7 @@ defmodule SymphonyElixir.Orchestrator do
 
         schedule_issue_retry(state, issue.id, next_handoff_retry_attempt(attempt), %{
           identifier: issue.identifier,
+          issue_url: issue.url,
           error: "review max-round handoff failed: #{inspect(reason)}"
         })
     end
@@ -909,6 +919,7 @@ defmodule SymphonyElixir.Orchestrator do
 
         schedule_issue_retry(state, issue.id, next_attempt, %{
           identifier: issue.identifier,
+          issue_url: issue.url,
           error: "failed to spawn agent: #{inspect(reason)}",
           worker_host: worker_host
         })
@@ -991,6 +1002,7 @@ defmodule SymphonyElixir.Orchestrator do
     retry_token = make_ref()
     due_at_ms = System.monotonic_time(:millisecond) + delay_ms
     identifier = pick_retry_identifier(issue_id, previous_retry, metadata)
+    issue_url = pick_retry_issue_url(previous_retry, metadata)
     error = pick_retry_error(previous_retry, metadata)
     worker_host = pick_retry_worker_host(previous_retry, metadata)
     workspace_path = pick_retry_workspace_path(previous_retry, metadata)
@@ -1014,6 +1026,7 @@ defmodule SymphonyElixir.Orchestrator do
             retry_token: retry_token,
             due_at_ms: due_at_ms,
             identifier: identifier,
+            issue_url: issue_url,
             error: error,
             worker_host: worker_host,
             workspace_path: workspace_path
@@ -1026,6 +1039,7 @@ defmodule SymphonyElixir.Orchestrator do
       %{attempt: attempt, retry_token: ^retry_token} = retry_entry ->
         metadata = %{
           identifier: Map.get(retry_entry, :identifier),
+          issue_url: Map.get(retry_entry, :issue_url),
           error: Map.get(retry_entry, :error),
           worker_host: Map.get(retry_entry, :worker_host),
           workspace_path: Map.get(retry_entry, :workspace_path)
@@ -1135,6 +1149,7 @@ defmodule SymphonyElixir.Orchestrator do
          attempt + 1,
          Map.merge(metadata, %{
            identifier: issue.identifier,
+           issue_url: issue.url,
            error: "no available orchestrator slots"
          })
        )}
@@ -1172,6 +1187,10 @@ defmodule SymphonyElixir.Orchestrator do
     metadata[:identifier] || Map.get(previous_retry, :identifier) || issue_id
   end
 
+  defp pick_retry_issue_url(previous_retry, metadata) do
+    metadata[:issue_url] || Map.get(previous_retry, :issue_url)
+  end
+
   defp pick_retry_error(previous_retry, metadata) do
     metadata[:error] || Map.get(previous_retry, :error)
   end
@@ -1183,6 +1202,66 @@ defmodule SymphonyElixir.Orchestrator do
   defp pick_retry_workspace_path(previous_retry, metadata) do
     metadata[:workspace_path] || Map.get(previous_retry, :workspace_path)
   end
+
+  defp running_entry_issue_url(%{issue: %Issue{url: url}}) when is_binary(url) and url != "", do: url
+  defp running_entry_issue_url(%{issue_url: url}) when is_binary(url) and url != "", do: url
+  defp running_entry_issue_url(_running_entry), do: nil
+
+  defp find_running_issue(running, issue_identifier) when is_map(running) do
+    Enum.find(running, fn {issue_id, running_entry} ->
+      issue_id == issue_identifier or Map.get(running_entry, :identifier) == issue_identifier or
+        Map.get(running_entry, :session_id) == issue_identifier
+    end)
+  end
+
+  defp find_running_issue(_running, _issue_identifier), do: nil
+
+  defp stopped_session_payload(issue_id, running_entry) do
+    %{
+      stopped: true,
+      issue_id: issue_id,
+      issue_identifier: Map.get(running_entry, :identifier),
+      tracker_url: running_entry_issue_url(running_entry),
+      session_id: Map.get(running_entry, :session_id),
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path)
+    }
+  end
+
+  defp record_past_session(%State{} = state, issue_id, running_entry, status, reason) when is_map(running_entry) do
+    ended_at = DateTime.utc_now()
+
+    session = %{
+      issue_id: issue_id,
+      identifier: Map.get(running_entry, :identifier),
+      issue_url: running_entry_issue_url(running_entry),
+      state: running_entry_issue_state(running_entry),
+      status: status,
+      reason: reason,
+      session_id: Map.get(running_entry, :session_id),
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path),
+      started_at: Map.get(running_entry, :started_at),
+      ended_at: ended_at,
+      runtime_seconds: running_seconds(Map.get(running_entry, :started_at), ended_at),
+      turn_count: Map.get(running_entry, :turn_count, 0),
+      last_codex_timestamp: Map.get(running_entry, :last_codex_timestamp),
+      last_codex_message: Map.get(running_entry, :last_codex_message),
+      last_codex_event: Map.get(running_entry, :last_codex_event),
+      codex_input_tokens: Map.get(running_entry, :codex_input_tokens, 0),
+      codex_output_tokens: Map.get(running_entry, :codex_output_tokens, 0),
+      codex_total_tokens: Map.get(running_entry, :codex_total_tokens, 0)
+    }
+
+    past_sessions = [session | List.wrap(state.past_sessions)] |> Enum.take(@session_history_limit)
+
+    %{state | past_sessions: past_sessions}
+  end
+
+  defp record_past_session(%State{} = state, _issue_id, _running_entry, _status, _reason), do: state
+
+  defp running_entry_issue_state(%{issue: %Issue{state: state}}), do: state
+  defp running_entry_issue_state(_running_entry), do: nil
 
   defp maybe_put_runtime_value(running_entry, _key, nil), do: running_entry
 
@@ -1300,6 +1379,24 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @spec stop_issue_session(String.t()) :: {:ok, map()} | {:error, :not_found} | :unavailable
+  def stop_issue_session(issue_identifier) when is_binary(issue_identifier) do
+    stop_issue_session(__MODULE__, issue_identifier)
+  end
+
+  @spec stop_issue_session(GenServer.server(), String.t()) :: {:ok, map()} | {:error, :not_found} | :unavailable
+  def stop_issue_session(server, issue_identifier) when is_binary(issue_identifier) do
+    if Process.whereis(server) do
+      try do
+        GenServer.call(server, {:stop_issue_session, issue_identifier})
+      catch
+        :exit, _reason -> :unavailable
+      end
+    else
+      :unavailable
+    end
+  end
+
   @spec snapshot() :: map() | :timeout | :unavailable
   def snapshot, do: snapshot(__MODULE__, 15_000)
 
@@ -1329,6 +1426,7 @@ defmodule SymphonyElixir.Orchestrator do
         %{
           issue_id: issue_id,
           identifier: metadata.identifier,
+          issue_url: running_entry_issue_url(metadata),
           state: metadata.issue.state,
           agent_role: Map.get(metadata, :agent_role, :implementation),
           worker_host: Map.get(metadata, :worker_host),
@@ -1355,15 +1453,19 @@ defmodule SymphonyElixir.Orchestrator do
           attempt: attempt,
           due_in_ms: max(0, due_at_ms - now_ms),
           identifier: Map.get(retry, :identifier),
+          issue_url: Map.get(retry, :issue_url),
           error: Map.get(retry, :error),
           worker_host: Map.get(retry, :worker_host),
           workspace_path: Map.get(retry, :workspace_path)
         }
       end)
 
+    past_sessions = state.past_sessions || []
+
     {:reply,
      %{
        running: running,
+       past_sessions: past_sessions,
        retrying: retrying,
        codex_totals: state.codex_totals,
        rate_limits: Map.get(state, :codex_rate_limits),
@@ -1388,6 +1490,25 @@ defmodule SymphonyElixir.Orchestrator do
        requested_at: DateTime.utc_now(),
        operations: ["poll", "reconcile"]
      }, state}
+  end
+
+  def handle_call({:stop_issue_session, issue_identifier}, _from, state) when is_binary(issue_identifier) do
+    case find_running_issue(state.running, issue_identifier) do
+      {issue_id, running_entry} ->
+        payload =
+          issue_id
+          |> stopped_session_payload(running_entry)
+          |> Map.put(:stopped_at, DateTime.utc_now())
+
+        Logger.info("Operator stopped session for issue_id=#{issue_id} issue_identifier=#{payload.issue_identifier} session_id=#{payload.session_id || "n/a"}")
+
+        state = terminate_running_issue(state, issue_id, false)
+        notify_dashboard()
+        {:reply, {:ok, payload}, state}
+
+      nil ->
+        {:reply, {:error, :not_found}, state}
+    end
   end
 
   defp integrate_codex_update(running_entry, %{event: event, timestamp: timestamp} = update) do

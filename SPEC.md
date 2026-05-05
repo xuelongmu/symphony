@@ -1556,12 +1556,14 @@ Minimum endpoints:
       "generated_at": "2026-02-24T20:15:30Z",
       "counts": {
         "running": 2,
-        "retrying": 1
+        "retrying": 1,
+        "past_sessions": 1
       },
       "running": [
         {
           "issue_id": "abc123",
           "issue_identifier": "MT-649",
+          "tracker_url": "https://linear.app/example/issue/MT-649",
           "state": "In Progress",
           "session_id": "thread-1-turn-1",
           "turn_count": 7,
@@ -1580,9 +1582,33 @@ Minimum endpoints:
         {
           "issue_id": "def456",
           "issue_identifier": "MT-650",
+          "tracker_url": "https://github.com/example/repo/pull/123",
           "attempt": 3,
           "due_at": "2026-02-24T20:16:00Z",
           "error": "no available orchestrator slots"
+        }
+      ],
+      "past_sessions": [
+        {
+          "issue_id": "abc123",
+          "issue_identifier": "MT-649",
+          "tracker_url": "https://linear.app/example/issue/MT-649",
+          "state": "In Progress",
+          "status": "completed",
+          "reason": null,
+          "session_id": "thread-1-turn-1",
+          "turn_count": 7,
+          "started_at": "2026-02-24T20:10:12Z",
+          "ended_at": "2026-02-24T20:15:30Z",
+          "runtime_seconds": 318,
+          "last_event": "turn_completed",
+          "last_message": "turn completed (completed)",
+          "last_event_at": "2026-02-24T20:14:59Z",
+          "tokens": {
+            "input_tokens": 1200,
+            "output_tokens": 800,
+            "total_tokens": 2000
+          }
         }
       ],
       "codex_totals": {
@@ -1604,6 +1630,7 @@ Minimum endpoints:
     {
       "issue_identifier": "MT-649",
       "issue_id": "abc123",
+      "tracker_url": "https://linear.app/example/issue/MT-649",
       "status": "running",
       "workspace": {
         "path": "/tmp/symphony_workspaces/MT-649"
@@ -1613,6 +1640,7 @@ Minimum endpoints:
         "current_retry_attempt": 2
       },
       "running": {
+        "tracker_url": "https://linear.app/example/issue/MT-649",
         "session_id": "thread-1-turn-1",
         "turn_count": 7,
         "state": "In Progress",
@@ -1666,11 +1694,34 @@ Minimum endpoints:
     }
     ```
 
+- `POST /api/v1/<issue_identifier>/stop`
+  - Stops the current running coding-agent session for the issue, when one exists.
+  - This is an operational control for the current in-memory session. It SHOULD terminate the active
+    worker without deleting the issue workspace or mutating tracker state.
+  - Suggested request body: empty body or `{}`.
+  - Suggested response (`202 Accepted`) shape:
+
+    ```json
+    {
+      "stopped": true,
+      "issue_id": "abc123",
+      "issue_identifier": "MT-649",
+      "tracker_url": "https://linear.app/example/issue/MT-649",
+      "session_id": "thread-1-turn-1",
+      "worker_host": null,
+      "workspace_path": "/tmp/symphony_workspaces/MT-649",
+      "stopped_at": "2026-02-24T20:15:30Z"
+    }
+    ```
+
+  - If the issue has no running session in the current in-memory state, return `404` with an error
+    response.
+
 API design notes:
 
 - The JSON shapes above are the RECOMMENDED baseline for interoperability and debugging ergonomics.
 - Implementations MAY add fields, but SHOULD avoid breaking existing fields within a version.
-- Endpoints SHOULD be read-only except for operational triggers like `/refresh`.
+- Endpoints SHOULD be read-only except for operational controls like `/refresh` and `/stop`.
 - Unsupported methods on defined routes SHOULD return `405 Method Not Allowed`.
 - API errors SHOULD use a JSON envelope such as `{"error":{"code":"...","message":"..."}}`.
 - If the dashboard is a client-side app, it SHOULD consume this API rather than duplicating state

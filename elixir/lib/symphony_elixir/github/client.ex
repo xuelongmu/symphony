@@ -13,7 +13,7 @@ defmodule SymphonyElixir.GitHub.Client do
   @max_error_body_log_bytes 1_000
 
   @project_items_query_user """
-  query SymphonyGitHubProjectItems($owner: String!, $number: Int!, $statusFieldName: String!, $first: Int!, $after: String, $blockedByFirst: Int!) {
+  query SymphonyGitHubProjectItems($owner: String!, $number: Int!, $statusFieldName: String!, $iterationFieldName: String!, $first: Int!, $after: String, $blockedByFirst: Int!) {
     user(login: $owner) {
       projectV2(number: $number) {
         id
@@ -72,11 +72,20 @@ defmodule SymphonyElixir.GitHub.Client do
                 number
               }
             }
-            fieldValueByName(name: $statusFieldName) {
+            statusFieldValue: fieldValueByName(name: $statusFieldName) {
               __typename
               ... on ProjectV2ItemFieldSingleSelectValue {
                 name
                 optionId
+              }
+            }
+            iterationFieldValue: fieldValueByName(name: $iterationFieldName) {
+              __typename
+              ... on ProjectV2ItemFieldIterationValue {
+                iterationId
+                title
+                startDate
+                duration
               }
             }
           }
@@ -91,7 +100,7 @@ defmodule SymphonyElixir.GitHub.Client do
   """
 
   @project_items_query_organization """
-  query SymphonyGitHubProjectItems($owner: String!, $number: Int!, $statusFieldName: String!, $first: Int!, $after: String, $blockedByFirst: Int!) {
+  query SymphonyGitHubProjectItems($owner: String!, $number: Int!, $statusFieldName: String!, $iterationFieldName: String!, $first: Int!, $after: String, $blockedByFirst: Int!) {
     organization(login: $owner) {
       projectV2(number: $number) {
         id
@@ -150,11 +159,20 @@ defmodule SymphonyElixir.GitHub.Client do
                 number
               }
             }
-            fieldValueByName(name: $statusFieldName) {
+            statusFieldValue: fieldValueByName(name: $statusFieldName) {
               __typename
               ... on ProjectV2ItemFieldSingleSelectValue {
                 name
                 optionId
+              }
+            }
+            iterationFieldValue: fieldValueByName(name: $iterationFieldName) {
+              __typename
+              ... on ProjectV2ItemFieldIterationValue {
+                iterationId
+                title
+                startDate
+                duration
               }
             }
           }
@@ -215,6 +233,22 @@ defmodule SymphonyElixir.GitHub.Client do
                 name
               }
             }
+            ... on ProjectV2IterationField {
+              configuration {
+                iterations {
+                  id
+                  title
+                  startDate
+                  duration
+                }
+                completedIterations {
+                  id
+                  title
+                  startDate
+                  duration
+                }
+              }
+            }
           }
           pageInfo {
             hasNextPage
@@ -243,6 +277,22 @@ defmodule SymphonyElixir.GitHub.Client do
               options {
                 id
                 name
+              }
+            }
+            ... on ProjectV2IterationField {
+              configuration {
+                iterations {
+                  id
+                  title
+                  startDate
+                  duration
+                }
+                completedIterations {
+                  id
+                  title
+                  startDate
+                  duration
+                }
               }
             }
           }
@@ -489,18 +539,27 @@ defmodule SymphonyElixir.GitHub.Client do
       terminal_states: Map.get(github_config, :terminal_states) || Map.get(github_config, "terminal_states") || ["Closed"]
     }
 
-    normalize_project_item(item, tracker)
+    current_iteration = Map.get(github_config, :current_iteration) || Map.get(github_config, "current_iteration")
+
+    normalize_project_item(item, tracker, current_iteration)
+  end
+
+  @doc false
+  @spec current_iteration_from_iterations_for_test([map()], Date.t()) :: map() | nil
+  def current_iteration_from_iterations_for_test(iterations, %Date{} = date) when is_list(iterations) do
+    current_iteration_from_iterations(iterations, date)
   end
 
   defp fetch_project_issues(graphql_fun) when is_function(graphql_fun, 2) do
     tracker = Config.settings!().tracker
 
     with {:ok, _project_id, items} <- fetch_project_items(graphql_fun),
+         {:ok, current_iteration} <- fetch_current_project_iteration(graphql_fun),
          items <- filter_project_issue_items_for_repo(items, tracker),
          {:ok, items} <- hydrate_blocker_pages(items, graphql_fun) do
       issues =
         items
-        |> Enum.map(&normalize_project_item(&1, tracker))
+        |> Enum.map(&normalize_project_item(&1, tracker, current_iteration))
         |> Enum.reject(&is_nil/1)
 
       {:ok, issues}
@@ -599,6 +658,7 @@ defmodule SymphonyElixir.GitHub.Client do
       owner: tracker.project_owner,
       number: tracker.project_number,
       statusFieldName: tracker.project_status_field,
+      iterationFieldName: project_iteration_field_name(tracker),
       first: @project_page_size,
       blockedByFirst: @blocked_by_page_size,
       after: after_cursor
@@ -633,14 +693,33 @@ defmodule SymphonyElixir.GitHub.Client do
   defp fetch_project_status_field(graphql_fun) when is_function(graphql_fun, 2) do
     tracker = Config.settings!().tracker
 
+    fetch_project_field(graphql_fun, tracker.project_status_field, :github_project_status_field_not_found)
+  end
+
+  defp fetch_current_project_iteration(graphql_fun) when is_function(graphql_fun, 2) do
+    case current_iteration_gate(Config.settings!().tracker) do
+      nil ->
+        {:ok, nil}
+
+      %{field: field_name} ->
+        with {:ok, %{field: field}} <-
+               fetch_project_field(graphql_fun, field_name, :github_project_iteration_field_not_found) do
+          current_iteration_from_project_field(field, Date.utc_today())
+        end
+    end
+  end
+
+  defp fetch_project_field(graphql_fun, field_name, not_found_reason) when is_function(graphql_fun, 2) do
+    tracker = Config.settings!().tracker
+
     with :ok <- validate_tracker_settings(tracker),
          {:ok, owner_key, query} <- project_fields_query(tracker.project_owner_type),
          {:ok, project_id, fields} <-
            do_fetch_project_fields_page(query, owner_key, tracker, graphql_fun, nil, nil, []) do
       fields
-      |> Enum.find(fn field -> normalized(field["name"]) == normalized(tracker.project_status_field) end)
+      |> Enum.find(fn field -> normalized(field["name"]) == normalized(field_name) end)
       |> case do
-        nil -> {:error, {:github_project_status_field_not_found, tracker.project_status_field}}
+        nil -> {:error, {not_found_reason, field_name}}
         field -> {:ok, %{project_id: project_id, field: field}}
       end
     end
@@ -956,7 +1035,7 @@ defmodule SymphonyElixir.GitHub.Client do
 
   defp decode_blocker_page_info(_blocked_by), do: {:error, :github_unknown_issue_blockers_payload}
 
-  defp normalize_project_item(%{"content" => %{"__typename" => "Issue"} = issue} = item, tracker) do
+  defp normalize_project_item(%{"content" => %{"__typename" => "Issue"} = issue} = item, tracker, current_iteration) do
     if repository_matches?(issue, tracker) do
       number = issue["number"]
       status = project_status_name(item)
@@ -972,6 +1051,7 @@ defmodule SymphonyElixir.GitHub.Client do
         branch_name: nil,
         url: issue["url"],
         assignee_id: List.first(assignees),
+        iteration: project_iteration(item, current_iteration),
         blocked_by: blocker_refs(issue, tracker),
         labels: label_names(issue),
         assigned_to_worker: true,
@@ -981,7 +1061,7 @@ defmodule SymphonyElixir.GitHub.Client do
     end
   end
 
-  defp normalize_project_item(_item, _tracker), do: nil
+  defp normalize_project_item(_item, _tracker, _current_iteration), do: nil
 
   defp repository_matches?(issue, tracker) do
     repository = issue["repository"] || %{}
@@ -991,8 +1071,143 @@ defmodule SymphonyElixir.GitHub.Client do
     normalized(owner) == normalized(tracker.owner) and normalized(repo) == normalized(tracker.repo)
   end
 
+  defp project_status_name(%{"statusFieldValue" => %{"name" => name}}) when is_binary(name), do: name
   defp project_status_name(%{"fieldValueByName" => %{"name" => name}}) when is_binary(name), do: name
   defp project_status_name(_item), do: nil
+
+  defp project_iteration(item, current_iteration) when is_map(item) do
+    item
+    |> project_iteration_value()
+    |> normalize_project_iteration_value(current_iteration)
+  end
+
+  defp project_iteration_value(%{
+         "iterationFieldValue" => %{"__typename" => "ProjectV2ItemFieldIterationValue"} = value
+       }),
+       do: value
+
+  defp project_iteration_value(%{
+         "fieldValueByName" => %{"__typename" => "ProjectV2ItemFieldIterationValue"} = value
+       }),
+       do: value
+
+  defp project_iteration_value(_item), do: nil
+
+  defp normalize_project_iteration_value(
+         %{"__typename" => "ProjectV2ItemFieldIterationValue"} = value,
+         current_iteration
+       ) do
+    iteration = normalize_iteration(value)
+
+    %{
+      iteration_id: iteration.iteration_id,
+      title: iteration.title,
+      start_date: iteration.start_date,
+      duration: iteration.duration,
+      current: current_project_iteration?(iteration, current_iteration)
+    }
+  end
+
+  defp normalize_project_iteration_value(_value, _current_iteration), do: nil
+
+  defp project_iteration_field_name(tracker) do
+    case current_iteration_gate(tracker) do
+      %{field: field_name} -> field_name
+      nil -> tracker.project_status_field || "Status"
+    end
+  end
+
+  defp current_iteration_gate(%{current_iteration: %{field: field_name, states: states}})
+       when is_binary(field_name) and is_list(states) do
+    gate_states =
+      states
+      |> Enum.map(&normalized/1)
+      |> Enum.reject(&(&1 == ""))
+
+    trimmed_field_name = String.trim(field_name)
+
+    if trimmed_field_name != "" and gate_states != [] do
+      %{field: trimmed_field_name, states: gate_states}
+    end
+  end
+
+  defp current_iteration_gate(_tracker), do: nil
+
+  defp current_iteration_from_project_field(field, %Date{} = date) when is_map(field) do
+    field
+    |> project_field_iterations()
+    |> current_iteration_from_iterations(date)
+    |> case do
+      nil -> {:ok, nil}
+      current_iteration -> {:ok, current_iteration}
+    end
+  end
+
+  defp project_field_iterations(%{"configuration" => configuration}) when is_map(configuration) do
+    iteration_list(configuration["completedIterations"]) ++ iteration_list(configuration["iterations"])
+  end
+
+  defp project_field_iterations(_field), do: []
+
+  defp iteration_list(iterations) when is_list(iterations), do: iterations
+  defp iteration_list(_iterations), do: []
+
+  defp current_iteration_from_iterations(iterations, %Date{} = date) when is_list(iterations) do
+    iterations
+    |> Enum.map(&normalize_iteration/1)
+    |> Enum.filter(&iteration_current_on?(&1, date))
+    |> Enum.max_by(&Date.to_gregorian_days(&1.start_date), fn -> nil end)
+  end
+
+  defp normalize_iteration(iteration) when is_map(iteration) do
+    iteration_id =
+      Map.get(iteration, "iterationId") ||
+        Map.get(iteration, "id") ||
+        Map.get(iteration, :iteration_id) ||
+        Map.get(iteration, :id)
+
+    %{
+      iteration_id: iteration_id,
+      title: Map.get(iteration, "title") || Map.get(iteration, :title),
+      start_date: parse_date(Map.get(iteration, "startDate") || Map.get(iteration, :start_date)),
+      duration: parse_positive_integer(Map.get(iteration, "duration") || Map.get(iteration, :duration))
+    }
+  end
+
+  defp normalize_iteration(_iteration) do
+    %{iteration_id: nil, title: nil, start_date: nil, duration: nil}
+  end
+
+  defp iteration_current_on?(%{start_date: %Date{} = start_date, duration: duration}, %Date{} = date)
+       when is_integer(duration) and duration > 0 do
+    Date.compare(date, start_date) != :lt and Date.compare(date, Date.add(start_date, duration)) == :lt
+  end
+
+  defp iteration_current_on?(_iteration, _date), do: false
+
+  defp current_project_iteration?(iteration, current_iteration) when is_map(iteration) and is_map(current_iteration) do
+    same_iteration_id?(iteration, current_iteration) or
+      same_iteration_window?(iteration, current_iteration)
+  end
+
+  defp current_project_iteration?(_iteration, _current_iteration), do: false
+
+  defp same_iteration_id?(%{iteration_id: iteration_id}, %{iteration_id: current_iteration_id})
+       when is_binary(iteration_id) and is_binary(current_iteration_id) do
+    iteration_id == current_iteration_id
+  end
+
+  defp same_iteration_id?(_iteration, _current_iteration), do: false
+
+  defp same_iteration_window?(
+         %{start_date: %Date{} = start_date, duration: duration},
+         %{start_date: %Date{} = current_start_date, duration: current_duration}
+       )
+       when is_integer(duration) and is_integer(current_duration) do
+    start_date == current_start_date and duration == current_duration
+  end
+
+  defp same_iteration_window?(_iteration, _current_iteration), do: false
 
   defp github_issue_state(issue, project_status, tracker) do
     if github_issue_closed?(issue) do
@@ -1273,6 +1488,30 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   defp normalized(value), do: value |> to_string() |> normalized()
+
+  defp parse_date(nil), do: nil
+
+  defp parse_date(%Date{} = date), do: date
+
+  defp parse_date(raw) when is_binary(raw) do
+    case Date.from_iso8601(raw) do
+      {:ok, date} -> date
+      _ -> nil
+    end
+  end
+
+  defp parse_date(_raw), do: nil
+
+  defp parse_positive_integer(value) when is_integer(value) and value > 0, do: value
+
+  defp parse_positive_integer(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {integer, ""} when integer > 0 -> integer
+      _ -> nil
+    end
+  end
+
+  defp parse_positive_integer(_value), do: nil
 
   defp parse_datetime(nil), do: nil
 

@@ -1047,19 +1047,75 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   test "status dashboard renders linear project link in header" do
-    snapshot_data =
-      {:ok,
-       %{
-         running: [],
-         retrying: [],
-         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
-         rate_limits: nil
-       }}
-
-    rendered = StatusDashboard.format_snapshot_content_for_test(snapshot_data, 0.0)
+    rendered = StatusDashboard.format_snapshot_content_for_test(empty_snapshot_data(), 0.0)
 
     assert rendered =~ "https://linear.app/project/project/issues"
     refute rendered =~ "Dashboard:"
+  end
+
+  test "status dashboard renders github organization project link in header" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_project_slug: nil,
+      tracker_api_token: "token",
+      tracker_owner: "animus-intelligence",
+      tracker_repo: "animus-agent",
+      tracker_project_owner: "animus-intelligence",
+      tracker_project_owner_type: "organization",
+      tracker_project_number: 1
+    )
+
+    rendered = StatusDashboard.format_snapshot_content_for_test(empty_snapshot_data(), 0.0)
+
+    assert rendered =~ "https://github.com/orgs/animus-intelligence/projects/1"
+    refute rendered =~ "https://linear.app/project"
+  end
+
+  test "status dashboard renders github user project link in header" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_project_slug: nil,
+      tracker_api_token: "token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_owner_type: "user",
+      tracker_project_number: 1
+    )
+
+    rendered = StatusDashboard.format_snapshot_content_for_test(empty_snapshot_data(), 0.0)
+
+    assert rendered =~ "https://github.com/users/xuelongmu/projects/1"
+    refute rendered =~ "https://linear.app/project"
+  end
+
+  test "status dashboard falls back to n/a for missing or invalid github project config" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_project_slug: nil,
+      tracker_api_token: "token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: nil,
+      tracker_project_number: nil
+    )
+
+    missing_rendered = StatusDashboard.format_snapshot_content_for_test(empty_snapshot_data(), 0.0)
+    assert project_line(missing_rendered) =~ "n/a"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_project_slug: nil,
+      tracker_api_token: "token",
+      tracker_owner: "xuelongmu",
+      tracker_repo: "symphony",
+      tracker_project_owner: "xuelongmu",
+      tracker_project_owner_type: "team",
+      tracker_project_number: 1
+    )
+
+    invalid_rendered = StatusDashboard.format_snapshot_content_for_test(empty_snapshot_data(), 0.0)
+    assert project_line(invalid_rendered) =~ "n/a"
   end
 
   test "status dashboard renders dashboard url on its own line when server port is configured" do
@@ -1675,5 +1731,21 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       {next_tokens, [{timestamp, next_tokens} | acc]}
     end)
     |> elem(1)
+  end
+
+  defp empty_snapshot_data do
+    {:ok,
+     %{
+       running: [],
+       retrying: [],
+       codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+       rate_limits: nil
+     }}
+  end
+
+  defp project_line(rendered) do
+    rendered
+    |> String.split("\n")
+    |> Enum.find(&String.contains?(&1, "Project:"))
   end
 end

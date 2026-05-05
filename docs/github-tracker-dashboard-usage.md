@@ -16,6 +16,8 @@ A typical project setup is:
 
 In the workflow config, `tracker.active_states` controls what project statuses Symphony may dispatch. To avoid taking over manually owned issues that are already `Ready` or `In progress`, also set `tracker.required_labels` to an explicit ownership label such as `symphony`.
 
+If your GitHub Project uses an iteration planning field, `tracker.current_iteration` can gate intake for selected statuses. A common setup gates only `Ready` so Symphony picks up newly queued work only when the issue belongs to the current Project iteration, while already-started statuses can continue across iteration boundaries.
+
 ## GitHub Setup
 
 Create or choose:
@@ -23,6 +25,7 @@ Create or choose:
 - A GitHub repository.
 - A GitHub Project v2.
 - A single-select project field, usually named `Status`.
+- Optionally, an iteration project field, usually named `Iteration`.
 - Status options matching your workflow, for example `Ready`, `In progress`, `In review`, and `Done`.
 
 The GitHub token must be available as `GITHUB_TOKEN` or as `tracker.api_key` in `WORKFLOW.md`.
@@ -55,6 +58,10 @@ tracker:
     - Ready
   required_labels:
     - symphony
+  current_iteration:
+    field: Iteration
+    states:
+      - Ready
   terminal_states:
     - Done
     - Closed
@@ -97,6 +104,8 @@ Important fields:
 - `tracker.project_status_field` names the single-select field Symphony reads.
 - `tracker.active_states` controls what can be dispatched.
 - `tracker.required_labels` optionally requires every listed label before an active issue can be dispatched.
+- `tracker.current_iteration.field` names the Projects v2 iteration field used for intake gating.
+- `tracker.current_iteration.states` lists active statuses that must be assigned to the current iteration before dispatch, typically `Ready`.
 - `tracker.terminal_states` controls what counts as complete for cleanup.
 - `issue.id` is the raw GitHub issue number.
 - `issue.identifier` is a route-safe identifier such as `github-xuelongmu-symphony-12`.
@@ -142,8 +151,9 @@ To queue a real issue:
 2. Add the `symphony` label, if `tracker.required_labels` uses that recommended gate.
 3. Add it to the configured Project v2.
 4. Set its project `Status` to one of `tracker.active_states`, for example `Ready`.
-5. Wait for the next poll or call `POST /api/v1/refresh`.
-6. Watch the dashboard.
+5. If `tracker.current_iteration.states` includes that status, set the configured iteration field to the current iteration.
+6. Wait for the next poll or call `POST /api/v1/refresh`.
+7. Watch the dashboard.
 
 When Symphony dispatches the issue, it:
 
@@ -217,11 +227,15 @@ tracker:
     - Ready
   required_labels:
     - symphony
+  current_iteration:
+    field: Iteration
+    states:
+      - Ready
 agent:
   max_concurrent_agents: 1
 ```
 
-Then label and move one disposable issue to `Ready`. This gives a controlled end-to-end run without picking up unrelated project items.
+Then label one disposable issue, assign it to the current iteration, and move it to `Ready`. This gives a controlled end-to-end run without picking up unrelated project items.
 
 For a production board where humans also use `Ready` and `In progress`, use the label as the ownership gate:
 
@@ -232,9 +246,13 @@ tracker:
     - In progress
   required_labels:
     - symphony
+  current_iteration:
+    field: Iteration
+    states:
+      - Ready
 ```
 
-Issues without the `symphony` label remain manually owned even if their Project status is active. If a running issue loses the required label, Symphony stops and releases its active worker on the next refresh.
+Issues without the `symphony` label remain manually owned even if their Project status is active. `Ready` issues outside the current iteration are skipped. `In progress` issues are not blocked by this example iteration gate, so in-flight work can continue when the calendar rolls over. If a running issue loses the required label, Symphony stops and releases its active worker on the next refresh.
 
 For a busier production loop, broaden `active_states` only after the prompt and status transitions are reliable.
 
@@ -246,6 +264,7 @@ No active sessions:
 - Confirm the project field name matches `tracker.project_status_field`.
 - Confirm the field option is in `tracker.active_states`.
 - If `tracker.required_labels` is set, confirm the issue has every required label.
+- If `tracker.current_iteration.states` includes the issue status, confirm the configured iteration field is set to the current iteration.
 - Call `POST /api/v1/refresh`.
 - Check the terminal logs for GitHub API errors.
 

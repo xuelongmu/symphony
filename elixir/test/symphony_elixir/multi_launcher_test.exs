@@ -40,6 +40,64 @@ defmodule SymphonyElixir.MultiLauncherTest do
     assert Keyword.fetch!(opts, :args) == ["--version"]
   end
 
+  test "default close kills the Windows process tree before closing the port" do
+    parent = self()
+    process = make_ref()
+
+    port_info = fn ^process, :os_pid -> {:os_pid, 1234} end
+
+    system_cmd = fn command, args, opts ->
+      send(parent, {:cmd, command, args, opts})
+      {"", 0}
+    end
+
+    port_close = fn ^process -> send(parent, :port_closed) end
+
+    assert :ok =
+             Launcher.close_process_for_test(process,
+               os_type: {:win32, :nt},
+               port_info: port_info,
+               system_cmd: system_cmd,
+               port_close: port_close
+             )
+
+    assert_receive {:cmd, "taskkill", ["/PID", "1234", "/T", "/F"], [stderr_to_stdout: true]}
+    assert_receive :port_closed
+  end
+
+  test "default close signals Unix process group and children before closing the port" do
+    parent = self()
+    process = make_ref()
+
+    port_info = fn ^process, :os_pid -> {:os_pid, 1234} end
+
+    system_cmd = fn command, args, opts ->
+      send(parent, {:cmd, command, args, opts})
+      {"", 0}
+    end
+
+    sleep = fn ms -> send(parent, {:sleep, ms}) end
+    port_close = fn ^process -> send(parent, :port_closed) end
+
+    assert :ok =
+             Launcher.close_process_for_test(process,
+               os_type: {:unix, :linux},
+               port_info: port_info,
+               system_cmd: system_cmd,
+               sleep: sleep,
+               port_close: port_close
+             )
+
+    assert_receive {:cmd, "kill", ["-TERM", "-1234"], [stderr_to_stdout: true]}
+    assert_receive {:cmd, "pkill", ["-TERM", "-P", "1234"], [stderr_to_stdout: true]}
+    assert_receive {:cmd, "kill", ["-TERM", "1234"], [stderr_to_stdout: true]}
+    assert_receive {:sleep, 250}
+    assert_receive {:cmd, "kill", ["-KILL", "-1234"], [stderr_to_stdout: true]}
+    assert_receive {:cmd, "pkill", ["-KILL", "-P", "1234"], [stderr_to_stdout: true]}
+    assert_receive {:cmd, "kill", ["-KILL", "1234"], [stderr_to_stdout: true]}
+    assert_receive :port_closed
+  end
+
   test "tracks running workflows and exit status" do
     parent = self()
     process_ref = make_ref()

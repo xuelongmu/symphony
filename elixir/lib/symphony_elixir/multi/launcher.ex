@@ -167,6 +167,10 @@ defmodule SymphonyElixir.Multi.Launcher do
   @spec port_options_for_test([String.t()], Config.Workflow.t()) :: list()
   def port_options_for_test(args, workflow), do: port_options(args, workflow)
 
+  @doc false
+  @spec close_process_for_test(term(), keyword()) :: :ok
+  def close_process_for_test(process, opts), do: close_process(process, opts)
+
   defp default_open_process(command, args, workflow) do
     port =
       Port.open({:spawn_executable, command}, port_options(args, workflow))
@@ -176,15 +180,75 @@ defmodule SymphonyElixir.Multi.Launcher do
     error -> {:error, Exception.message(error)}
   end
 
-  defp default_close_process(process) when is_port(process) do
-    Port.close(process)
+  defp default_close_process(process), do: close_process(process, [])
+
+  defp close_process(process, opts) when is_port(process) or opts != [] do
+    port_info = Keyword.get(opts, :port_info, &:erlang.port_info/2)
+    port_close = Keyword.get(opts, :port_close, &Port.close/1)
+    system_cmd = Keyword.get(opts, :system_cmd, &System.cmd/3)
+    sleep = Keyword.get(opts, :sleep, &Process.sleep/1)
+    os_type = Keyword.get(opts, :os_type, :os.type())
+
+    process
+    |> os_pid(port_info)
+    |> terminate_process_tree(os_type, system_cmd, sleep)
+
+    close_port(process, port_close)
+  end
+
+  defp close_process(_process, _opts), do: :ok
+
+  defp os_pid(process, port_info) do
+    case port_info.(process, :os_pid) do
+      {:os_pid, os_pid} when is_integer(os_pid) and os_pid > 0 -> os_pid
+      _unknown -> nil
+    end
+  rescue
+    _error -> nil
+  catch
+    :exit, _reason -> nil
+  end
+
+  defp terminate_process_tree(nil, _os_type, _system_cmd, _sleep), do: :ok
+
+  defp terminate_process_tree(os_pid, {:win32, _}, system_cmd, _sleep) do
+    run_system_cmd(system_cmd, "taskkill", ["/PID", Integer.to_string(os_pid), "/T", "/F"])
+  end
+
+  defp terminate_process_tree(os_pid, {:unix, _}, system_cmd, sleep) do
+    pid = Integer.to_string(os_pid)
+    process_group = "-#{pid}"
+
+    run_system_cmd(system_cmd, "kill", ["-TERM", process_group])
+    run_system_cmd(system_cmd, "pkill", ["-TERM", "-P", pid])
+    run_system_cmd(system_cmd, "kill", ["-TERM", pid])
+    sleep.(250)
+    run_system_cmd(system_cmd, "kill", ["-KILL", process_group])
+    run_system_cmd(system_cmd, "pkill", ["-KILL", "-P", pid])
+    run_system_cmd(system_cmd, "kill", ["-KILL", pid])
+  end
+
+  defp terminate_process_tree(os_pid, _os_type, system_cmd, _sleep) do
+    run_system_cmd(system_cmd, "kill", ["-TERM", Integer.to_string(os_pid)])
+  end
+
+  defp run_system_cmd(system_cmd, command, args) do
+    system_cmd.(command, args, stderr_to_stdout: true)
+    :ok
   rescue
     _error -> :ok
   catch
     :exit, _reason -> :ok
   end
 
-  defp default_close_process(_process), do: :ok
+  defp close_port(process, port_close) do
+    port_close.(process)
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    :exit, _reason -> :ok
+  end
 
   defp port_options(args, workflow) do
     [

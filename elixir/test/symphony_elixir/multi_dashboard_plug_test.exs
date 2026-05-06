@@ -49,6 +49,25 @@ defmodule SymphonyElixir.MultiDashboardPlugTest do
     assert [%{child_state: %{available: false, error: ":econnrefused"}}] = payload.workflows
   end
 
+  test "starts Req before polling child dashboards with the default request function" do
+    parent = self()
+
+    ensure_req_started = fn :req ->
+      send(parent, :req_started)
+      {:error, :not_started}
+    end
+
+    payload =
+      DashboardPlug.payload(
+        launcher: :launcher,
+        status_fun: fn :launcher -> @status end,
+        ensure_req_started: ensure_req_started
+      )
+
+    assert_received :req_started
+    assert [%{child_state: %{available: false, error: "{:req_start_failed, :not_started}"}}] = payload.workflows
+  end
+
   test "fetches child dashboard state concurrently" do
     parent = self()
 

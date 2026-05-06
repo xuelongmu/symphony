@@ -36,7 +36,7 @@ defmodule SymphonyElixir.Multi.DashboardPlug do
     launcher = Keyword.fetch!(opts, :launcher)
     status_fun = Keyword.get(opts, :status_fun, &Launcher.status/1)
     fetch_child_state? = Keyword.get(opts, :fetch_child_state?, true)
-    request_fun = Keyword.get(opts, :request_fun, &Req.get/2)
+    request_fun = request_fun(opts)
 
     workflows =
       launcher
@@ -52,6 +52,25 @@ defmodule SymphonyElixir.Multi.DashboardPlug do
       },
       workflows: workflows
     }
+  end
+
+  defp request_fun(opts) do
+    case Keyword.fetch(opts, :request_fun) do
+      {:ok, request_fun} ->
+        request_fun
+
+      :error ->
+        default_request_fun(opts)
+    end
+  end
+
+  defp default_request_fun(opts) do
+    ensure_req_started = Keyword.get(opts, :ensure_req_started, &Application.ensure_all_started/1)
+
+    case ensure_req_started.(:req) do
+      {:ok, _apps} -> &Req.get/2
+      {:error, reason} -> fn _url, _opts -> {:error, {:req_start_failed, reason}} end
+    end
   end
 
   defp workflow_payloads(statuses, false, request_fun, _opts) do

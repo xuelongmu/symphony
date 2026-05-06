@@ -15,8 +15,7 @@ defmodule SymphonyElixir.MultiConfigTest do
           "name" => "api",
           "workflow" => "api/WORKFLOW.md",
           "logs_root" => "logs/api",
-          "port" => 4101,
-          "extra_args" => ["--verbose"]
+          "port" => 4101
         },
         %{"name" => "web", "workflow" => "web/WORKFLOW.md", "port" => 4102}
       ]
@@ -33,8 +32,18 @@ defmodule SymphonyElixir.MultiConfigTest do
     assert api.workflow == api_workflow
     assert api.logs_root == Path.expand("logs/api", base_dir)
     assert api.port == 4101
-    assert api.extra_args == ["--verbose"]
     assert web.workflow == web_workflow
+  end
+
+  test "rejects extra args because child CLI switches are strict" do
+    attrs = %{
+      "workflows" => [
+        %{"name" => "api", "workflow" => "api/WORKFLOW.md", "extra_args" => ["--trace"]}
+      ]
+    }
+
+    assert {:error, {:unsupported_multi_config_field, "workflows[1].extra_args"}} =
+             Config.from_map(attrs, File.cwd!(), fn _path -> true end)
   end
 
   test "requires unique workflow names" do

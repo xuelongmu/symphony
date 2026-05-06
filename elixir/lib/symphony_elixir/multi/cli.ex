@@ -188,6 +188,7 @@ defmodule SymphonyElixir.Multi.CLI do
   end
 
   defp format_error({:invalid_multi_config_field, field}), do: "Invalid cacophany config field: #{field}"
+  defp format_error({:unsupported_multi_config_field, field}), do: "Unsupported cacophany config field: #{field}"
   defp format_error({:invalid_multi_config_workflow, index}), do: "Invalid workflow entry at index #{index}."
 
   defp format_error({:missing_workflow_file, index, path}) do

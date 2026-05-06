@@ -12,14 +12,13 @@ defmodule SymphonyElixir.Multi.Config do
 
   defmodule Workflow do
     @moduledoc false
-    defstruct [:name, :workflow, :logs_root, :port, extra_args: []]
+    defstruct [:name, :workflow, :logs_root, :port]
 
     @type t :: %__MODULE__{
             name: String.t(),
             workflow: Path.t(),
             logs_root: Path.t() | nil,
-            port: non_neg_integer() | nil,
-            extra_args: [String.t()]
+            port: non_neg_integer() | nil
           }
   end
 
@@ -112,14 +111,13 @@ defmodule SymphonyElixir.Multi.Config do
          true <- file_regular?.(expanded_workflow),
          {:ok, logs_root} <- optional_path(attrs, "logs_root", base_dir, workflow_field(index, "logs_root")),
          {:ok, port} <- parse_optional_port(Map.get(attrs, "port"), workflow_field(index, "port")),
-         {:ok, extra_args} <- parse_extra_args(Map.get(attrs, "extra_args", []), workflow_field(index, "extra_args")) do
+         :ok <- reject_extra_args(Map.get(attrs, "extra_args", []), workflow_field(index, "extra_args")) do
       {:ok,
        %Workflow{
          name: name,
          workflow: expanded_workflow,
          logs_root: logs_root,
-         port: port,
-         extra_args: extra_args
+         port: port
        }}
     else
       false -> {:error, {:missing_workflow_file, index, expand_path(Map.get(attrs, "workflow", ""), base_dir)}}
@@ -172,15 +170,9 @@ defmodule SymphonyElixir.Multi.Config do
 
   defp parse_optional_port(_port, field), do: {:error, {:invalid_multi_config_field, field}}
 
-  defp parse_extra_args(args, _field) when is_list(args) do
-    if Enum.all?(args, &is_binary/1) do
-      {:ok, args}
-    else
-      {:error, {:invalid_multi_config_field, "extra_args"}}
-    end
-  end
-
-  defp parse_extra_args(_args, field), do: {:error, {:invalid_multi_config_field, field}}
+  defp reject_extra_args(nil, _field), do: :ok
+  defp reject_extra_args([], _field), do: :ok
+  defp reject_extra_args(_args, field), do: {:error, {:unsupported_multi_config_field, field}}
 
   defp validate_unique_names(workflows) do
     duplicates =

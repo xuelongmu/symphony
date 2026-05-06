@@ -157,7 +157,6 @@ defmodule SymphonyElixir.Multi.Launcher do
     |> maybe_append("--logs-root", workflow.logs_root)
     |> maybe_append("--port", workflow.port && Integer.to_string(workflow.port))
     |> Kernel.++([@ack_flag])
-    |> Kernel.++(workflow.extra_args)
     |> Kernel.++([workflow.workflow])
   end
 

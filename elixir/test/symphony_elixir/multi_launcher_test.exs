@@ -10,8 +10,7 @@ defmodule SymphonyElixir.MultiLauncherTest do
     name: "api",
     workflow: "C:/repos/api/WORKFLOW.md",
     logs_root: "C:/tmp/cacophany/api",
-    port: 4101,
-    extra_args: ["--trace"]
+    port: 4101
   }
 
   test "builds child command args for a workflow" do
@@ -28,7 +27,6 @@ defmodule SymphonyElixir.MultiLauncherTest do
                  "--port",
                  "4101",
                  "--i-understand-that-this-will-be-running-without-the-usual-guardrails",
-                 "--trace",
                  "C:/repos/api/WORKFLOW.md"
                ]
              }

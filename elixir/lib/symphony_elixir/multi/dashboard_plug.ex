@@ -41,7 +41,7 @@ defmodule SymphonyElixir.Multi.DashboardPlug do
     workflows =
       launcher
       |> status_fun.()
-      |> Enum.map(&workflow_payload(&1, fetch_child_state?, request_fun))
+      |> workflow_payloads(fetch_child_state?, request_fun, opts)
 
     %{
       generated_at: now_iso8601(),
@@ -52,6 +52,30 @@ defmodule SymphonyElixir.Multi.DashboardPlug do
       },
       workflows: workflows
     }
+  end
+
+  defp workflow_payloads(statuses, false, request_fun, _opts) do
+    Enum.map(statuses, &workflow_payload(&1, false, request_fun))
+  end
+
+  defp workflow_payloads(statuses, true, request_fun, opts) do
+    max_concurrency = Keyword.get(opts, :child_state_max_concurrency, 8)
+    timeout = Keyword.get(opts, :child_state_timeout, 1_000)
+
+    statuses
+    |> Task.async_stream(&workflow_payload(&1, true, request_fun),
+      max_concurrency: max_concurrency,
+      on_timeout: :kill_task,
+      timeout: timeout
+    )
+    |> Enum.zip(statuses)
+    |> Enum.map(fn
+      {{:ok, payload}, _status} ->
+        payload
+
+      {{:exit, reason}, status} ->
+        Map.put(status, :child_state, %{available: false, error: inspect(reason)})
+    end)
   end
 
   defp workflow_payload(status, false, _request_fun), do: Map.put(status, :child_state, nil)

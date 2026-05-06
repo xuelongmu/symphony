@@ -257,6 +257,22 @@ defmodule SymphonyElixirWeb.DashboardLive do
                             · <span class="mono numeric"><%= entry.last_event_at %></span>
                           <% end %>
                         </span>
+                        <%= if entry.recent_events != [] do %>
+                          <details class="event-history">
+                            <summary>Activity (<%= length(entry.recent_events) %>)</summary>
+                            <ol>
+                              <li :for={event <- entry.recent_events}>
+                                <span class="event-history-message"><%= event.message || "n/a" %></span>
+                                <span class="muted event-history-meta">
+                                  <%= event.event || "n/a" %>
+                                  <%= if event.at do %>
+                                    · <span class="mono numeric"><%= event.at %></span>
+                                  <% end %>
+                                </span>
+                              </li>
+                            </ol>
+                          </details>
+                        <% end %>
                       </div>
                     </td>
                     <td>
@@ -420,6 +436,22 @@ defmodule SymphonyElixirWeb.DashboardLive do
                             · <span class="mono numeric"><%= entry.last_event_at %></span>
                           <% end %>
                         </span>
+                        <%= if entry.recent_events != [] do %>
+                          <details class="event-history">
+                            <summary>Activity (<%= length(entry.recent_events) %>)</summary>
+                            <ol>
+                              <li :for={event <- entry.recent_events}>
+                                <span class="event-history-message"><%= event.message || "n/a" %></span>
+                                <span class="muted event-history-meta">
+                                  <%= event.event || "n/a" %>
+                                  <%= if event.at do %>
+                                    · <span class="mono numeric"><%= event.at %></span>
+                                  <% end %>
+                                </span>
+                              </li>
+                            </ol>
+                          </details>
+                        <% end %>
                       </div>
                     </td>
                     <td>

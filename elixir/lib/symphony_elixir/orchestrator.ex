@@ -16,6 +16,7 @@ defmodule SymphonyElixir.Orchestrator do
   @poll_transition_render_delay_ms 20
   @human_review_state "Human Review"
   @session_history_limit 50
+  @codex_event_history_limit 20
   @empty_codex_totals %{
     input_tokens: 0,
     output_tokens: 0,
@@ -894,6 +895,7 @@ defmodule SymphonyElixir.Orchestrator do
             last_codex_message: nil,
             last_codex_timestamp: nil,
             last_codex_event: nil,
+            recent_codex_messages: [],
             codex_app_server_pid: nil,
             codex_input_tokens: 0,
             codex_output_tokens: 0,
@@ -1248,6 +1250,7 @@ defmodule SymphonyElixir.Orchestrator do
       last_codex_timestamp: Map.get(running_entry, :last_codex_timestamp),
       last_codex_message: Map.get(running_entry, :last_codex_message),
       last_codex_event: Map.get(running_entry, :last_codex_event),
+      recent_codex_messages: Map.get(running_entry, :recent_codex_messages, []),
       codex_input_tokens: Map.get(running_entry, :codex_input_tokens, 0),
       codex_output_tokens: Map.get(running_entry, :codex_output_tokens, 0),
       codex_total_tokens: Map.get(running_entry, :codex_total_tokens, 0)
@@ -1441,6 +1444,7 @@ defmodule SymphonyElixir.Orchestrator do
           last_codex_timestamp: metadata.last_codex_timestamp,
           last_codex_message: metadata.last_codex_message,
           last_codex_event: metadata.last_codex_event,
+          recent_codex_messages: Map.get(metadata, :recent_codex_messages, []),
           runtime_seconds: running_seconds(metadata.started_at, now)
         }
       end)
@@ -1512,6 +1516,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp integrate_codex_update(running_entry, %{event: event, timestamp: timestamp} = update) do
+    summarized_update = summarize_codex_update(update)
     token_delta = extract_token_delta(running_entry, update)
     codex_input_tokens = Map.get(running_entry, :codex_input_tokens, 0)
     codex_output_tokens = Map.get(running_entry, :codex_output_tokens, 0)
@@ -1525,9 +1530,10 @@ defmodule SymphonyElixir.Orchestrator do
     {
       Map.merge(running_entry, %{
         last_codex_timestamp: timestamp,
-        last_codex_message: summarize_codex_update(update),
+        last_codex_message: summarized_update,
         session_id: session_id_for_update(running_entry.session_id, update),
         last_codex_event: event,
+        recent_codex_messages: append_recent_codex_message(running_entry, summarized_update),
         codex_app_server_pid: codex_app_server_pid_for_update(codex_app_server_pid, update),
         codex_input_tokens: codex_input_tokens + token_delta.input_tokens,
         codex_output_tokens: codex_output_tokens + token_delta.output_tokens,
@@ -1583,6 +1589,11 @@ defmodule SymphonyElixir.Orchestrator do
       message: update[:payload] || update[:raw],
       timestamp: update[:timestamp]
     }
+  end
+
+  defp append_recent_codex_message(running_entry, summarized_update) do
+    [summarized_update | Map.get(running_entry, :recent_codex_messages, [])]
+    |> Enum.take(@codex_event_history_limit)
   end
 
   defp schedule_tick(%State{} = state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do

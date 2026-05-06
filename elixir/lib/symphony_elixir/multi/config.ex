@@ -168,7 +168,7 @@ defmodule SymphonyElixir.Multi.Config do
 
   defp parse_optional_port(nil, _field), do: {:ok, nil}
 
-  defp parse_optional_port(port, _field) when is_integer(port) and port >= 0, do: {:ok, port}
+  defp parse_optional_port(port, _field) when is_integer(port) and port > 0, do: {:ok, port}
 
   defp parse_optional_port(_port, field), do: {:error, {:invalid_multi_config_field, field}}
 

@@ -71,6 +71,27 @@ defmodule SymphonyElixir.MultiConfigTest do
              Config.from_map(collision_attrs, File.cwd!(), fn _path -> true end)
   end
 
+  test "rejects ephemeral port zero because dashboard URLs need stable ports" do
+    dashboard_attrs = %{
+      "dashboard" => %{"port" => 0},
+      "workflows" => [
+        %{"name" => "api", "workflow" => "api/WORKFLOW.md", "port" => 4101}
+      ]
+    }
+
+    assert {:error, {:invalid_multi_config_field, "dashboard.port"}} =
+             Config.from_map(dashboard_attrs, File.cwd!(), fn _path -> true end)
+
+    workflow_attrs = %{
+      "workflows" => [
+        %{"name" => "api", "workflow" => "api/WORKFLOW.md", "port" => 0}
+      ]
+    }
+
+    assert {:error, {:invalid_multi_config_field, "workflows[1].port"}} =
+             Config.from_map(workflow_attrs, File.cwd!(), fn _path -> true end)
+  end
+
   test "requires workflow ports when dashboard hub is enabled" do
     attrs = %{
       "dashboard" => %{"port" => 4100},

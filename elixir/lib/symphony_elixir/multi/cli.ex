@@ -133,12 +133,7 @@ defmodule SymphonyElixir.Multi.CLI do
   defp start_dashboard(_config, _launcher), do: :ok
 
   defp current_command_parts do
-    script_name =
-      case :escript.script_name() do
-        name when is_list(name) -> List.to_string(name)
-        name when is_binary(name) -> name
-        _ -> ""
-      end
+    script_name = :escript.script_name() |> List.to_string()
 
     cond do
       script_name != "" and System.find_executable("escript") ->

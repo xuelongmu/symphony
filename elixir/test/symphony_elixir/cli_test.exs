@@ -25,6 +25,10 @@ defmodule SymphonyElixir.CLITest do
         send(parent, :port_set)
         :ok
       end,
+      cacophany_evaluate: fn _args ->
+        send(parent, :cacophany_started)
+        {:launcher, self()}
+      end,
       ensure_all_started: fn ->
         send(parent, :started)
         {:ok, [:symphony_elixir]}
@@ -40,7 +44,28 @@ defmodule SymphonyElixir.CLITest do
     refute_received :workflow_set
     refute_received :logs_root_set
     refute_received :port_set
+    refute_received :cacophany_started
     refute_received :started
+  end
+
+  test "routes cacophany subcommand to the multi-workflow launcher" do
+    parent = self()
+
+    deps = %{
+      file_regular?: fn _path -> false end,
+      set_workflow_file_path: fn _path -> :ok end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      ensure_all_started: fn -> {:error, :should_not_start_single_workflow} end,
+      cacophany_evaluate: fn args ->
+        send(parent, {:cacophany_args, args})
+        {:launcher, self()}
+      end
+    }
+
+    assert {:launcher, launcher} = CLI.evaluate(["cacophany", "--flag", "CACOPHANY.yml"], deps)
+    assert launcher == self()
+    assert_received {:cacophany_args, ["--flag", "CACOPHANY.yml"]}
   end
 
   test "defaults to WORKFLOW.md when workflow path is missing" do

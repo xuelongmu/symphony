@@ -151,6 +151,39 @@ To enable the optional dashboard while Symphony runs:
 
 Then open `http://127.0.0.1:4000/`.
 
+## Run Multiple Repositories With Cacophany
+
+Use `cacophany` when you want one command to run several independent Symphony workflows and switch
+between their dashboards from a small hub page. Each repository still owns its own `WORKFLOW.md`,
+workspace root, tracker configuration, and lifecycle hooks.
+
+Create a `CACOPHANY.yml` file:
+
+```yaml
+dashboard:
+  port: 4100
+workflows:
+  - name: api
+    workflow: C:/repos/api/WORKFLOW.md
+    logs_root: C:/tmp/symphony-logs/api
+    port: 4101
+  - name: web
+    workflow: C:/repos/web/WORKFLOW.md
+    logs_root: C:/tmp/symphony-logs/web
+    port: 4102
+```
+
+Start the launcher from `elixir/`:
+
+```bash
+./bin/symphony cacophany \
+  --i-understand-that-this-will-be-running-without-the-usual-guardrails \
+  /path/to/CACOPHANY.yml
+```
+
+Open `http://127.0.0.1:4100/` to switch between repo dashboards. The child dashboards remain
+available directly on their configured ports.
+
 ## Configuration
 
 Pass a custom workflow file path to `./bin/symphony` when starting the service:

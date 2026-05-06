@@ -161,16 +161,16 @@ Create a `CACOPHANY.yml` file:
 
 ```yaml
 dashboard:
-  port: 4100
+  port: 4000
 workflows:
   - name: api
     workflow: C:/repos/api/WORKFLOW.md
     logs_root: C:/tmp/symphony-logs/api
-    port: 4101
+    port: 4001
   - name: web
     workflow: C:/repos/web/WORKFLOW.md
     logs_root: C:/tmp/symphony-logs/web
-    port: 4102
+    port: 4002
 ```
 
 Start the launcher from `elixir/`:
@@ -181,7 +181,7 @@ Start the launcher from `elixir/`:
   /path/to/CACOPHANY.yml
 ```
 
-Open `http://127.0.0.1:4100/` to switch between repo dashboards. The child dashboards remain
+Open `http://127.0.0.1:4000/` to switch between repo dashboards. The child dashboards remain
 available directly on their configured ports.
 
 ## Configuration

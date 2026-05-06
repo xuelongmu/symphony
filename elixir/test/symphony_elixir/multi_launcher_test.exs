@@ -10,7 +10,7 @@ defmodule SymphonyElixir.MultiLauncherTest do
     name: "api",
     workflow: "C:/repos/api/WORKFLOW.md",
     logs_root: "C:/tmp/cacophany/api",
-    port: 4101
+    port: 4001
   }
 
   test "builds child command args for a workflow" do
@@ -25,7 +25,7 @@ defmodule SymphonyElixir.MultiLauncherTest do
                  "--logs-root",
                  "C:/tmp/cacophany/api",
                  "--port",
-                 "4101",
+                 "4001",
                  "--i-understand-that-this-will-be-running-without-the-usual-guardrails",
                  "C:/repos/api/WORKFLOW.md"
                ]
@@ -117,7 +117,7 @@ defmodule SymphonyElixir.MultiLauncherTest do
              )
 
     assert_received {:opened, "symphony", _args, "api"}
-    assert [%{name: "api", status: "running", dashboard_url: "http://127.0.0.1:4101/"}] = Launcher.status(launcher)
+    assert [%{name: "api", status: "running", dashboard_url: "http://127.0.0.1:4001/"}] = Launcher.status(launcher)
 
     capture_io(:stderr, fn ->
       send(launcher, {process_ref, {:exit_status, 7}})
@@ -134,7 +134,7 @@ defmodule SymphonyElixir.MultiLauncherTest do
 
     workflows = [
       %{@workflow | name: "api"},
-      %{@workflow | name: "web", workflow: "C:/repos/web/WORKFLOW.md", port: 4102}
+      %{@workflow | name: "web", workflow: "C:/repos/web/WORKFLOW.md", port: 4002}
     ]
 
     open_process = fn

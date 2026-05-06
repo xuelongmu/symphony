@@ -9,29 +9,29 @@ defmodule SymphonyElixir.MultiConfigTest do
     web_workflow = Path.expand("web/WORKFLOW.md", base_dir)
 
     attrs = %{
-      "dashboard" => %{"port" => 4100},
+      "dashboard" => %{"port" => 4000},
       "workflows" => [
         %{
           "name" => "api",
           "workflow" => "api/WORKFLOW.md",
           "logs_root" => "logs/api",
-          "port" => 4101
+          "port" => 4001
         },
-        %{"name" => "web", "workflow" => "web/WORKFLOW.md", "port" => 4102}
+        %{"name" => "web", "workflow" => "web/WORKFLOW.md", "port" => 4002}
       ]
     }
 
     assert {:ok, config} =
              Config.from_map(attrs, base_dir, fn path -> path in [api_workflow, web_workflow] end)
 
-    assert config.dashboard.port == 4100
+    assert config.dashboard.port == 4000
     assert Config.dashboard_enabled?(config)
     assert Enum.map(config.workflows, & &1.name) == ["api", "web"]
 
     [api, web] = config.workflows
     assert api.workflow == api_workflow
     assert api.logs_root == Path.expand("logs/api", base_dir)
-    assert api.port == 4101
+    assert api.port == 4001
     assert web.workflow == web_workflow
   end
 
@@ -61,22 +61,22 @@ defmodule SymphonyElixir.MultiConfigTest do
   test "requires unique workflow ports and no dashboard collision" do
     duplicate_attrs = %{
       "workflows" => [
-        %{"name" => "api", "workflow" => "api/WORKFLOW.md", "port" => 4101},
-        %{"name" => "web", "workflow" => "web/WORKFLOW.md", "port" => 4101}
+        %{"name" => "api", "workflow" => "api/WORKFLOW.md", "port" => 4001},
+        %{"name" => "web", "workflow" => "web/WORKFLOW.md", "port" => 4001}
       ]
     }
 
-    assert {:error, {:duplicate_workflow_ports, [4101]}} =
+    assert {:error, {:duplicate_workflow_ports, [4001]}} =
              Config.from_map(duplicate_attrs, File.cwd!(), fn _path -> true end)
 
     collision_attrs = %{
-      "dashboard" => %{"port" => 4100},
+      "dashboard" => %{"port" => 4000},
       "workflows" => [
-        %{"name" => "api", "workflow" => "api/WORKFLOW.md", "port" => 4100}
+        %{"name" => "api", "workflow" => "api/WORKFLOW.md", "port" => 4000}
       ]
     }
 
-    assert {:error, {:dashboard_port_conflicts_with_workflow, 4100}} =
+    assert {:error, {:dashboard_port_conflicts_with_workflow, 4000}} =
              Config.from_map(collision_attrs, File.cwd!(), fn _path -> true end)
   end
 
@@ -84,7 +84,7 @@ defmodule SymphonyElixir.MultiConfigTest do
     dashboard_attrs = %{
       "dashboard" => %{"port" => 0},
       "workflows" => [
-        %{"name" => "api", "workflow" => "api/WORKFLOW.md", "port" => 4101}
+        %{"name" => "api", "workflow" => "api/WORKFLOW.md", "port" => 4001}
       ]
     }
 
@@ -103,7 +103,7 @@ defmodule SymphonyElixir.MultiConfigTest do
 
   test "requires workflow ports when dashboard hub is enabled" do
     attrs = %{
-      "dashboard" => %{"port" => 4100},
+      "dashboard" => %{"port" => 4000},
       "workflows" => [
         %{"name" => "api", "workflow" => "api/WORKFLOW.md"}
       ]

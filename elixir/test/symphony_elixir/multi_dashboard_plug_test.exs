@@ -10,8 +10,8 @@ defmodule SymphonyElixir.MultiDashboardPlugTest do
       name: "api",
       workflow: "C:/repos/api/WORKFLOW.md",
       logs_root: "C:/tmp/cacophany/api",
-      port: 4101,
-      dashboard_url: "http://127.0.0.1:4101/",
+      port: 4001,
+      dashboard_url: "http://127.0.0.1:4001/",
       status: "running",
       exit_status: nil,
       started_at: "2026-05-06T00:00:00Z",
@@ -31,7 +31,7 @@ defmodule SymphonyElixir.MultiDashboardPlugTest do
 
     assert conn.status == 200
     assert conn.resp_body =~ "Cacophany"
-    assert conn.resp_body =~ "http://127.0.0.1:4101/"
+    assert conn.resp_body =~ "http://127.0.0.1:4001/"
     assert conn.resp_body =~ "api"
   end
 

@@ -30,13 +30,13 @@ defmodule SymphonyElixir.MultiCLITest do
     parent = self()
 
     config = %Config{
-      dashboard: %Config.Dashboard{port: 4100},
+      dashboard: %Config.Dashboard{port: 4000},
       workflows: [
         %Config.Workflow{
           name: "api",
           workflow: "C:/repos/api/WORKFLOW.md",
           logs_root: "C:/tmp/cacophany/api",
-          port: 4101
+          port: 4001
         }
       ]
     }
@@ -60,9 +60,9 @@ defmodule SymphonyElixir.MultiCLITest do
         assert launcher == self()
       end)
 
-    assert output =~ "Cacophany dashboard: http://127.0.0.1:4100/"
+    assert output =~ "Cacophany dashboard: http://127.0.0.1:4000/"
     assert_received {:launcher_started, ^config, "escript", ["bin/symphony"]}
-    assert_received {:dashboard_started, 4100, launcher}
+    assert_received {:dashboard_started, 4000, launcher}
     assert launcher == self()
   end
 
@@ -71,12 +71,12 @@ defmodule SymphonyElixir.MultiCLITest do
     launcher = spawn(fn -> Process.sleep(:infinity) end)
 
     config = %Config{
-      dashboard: %Config.Dashboard{port: 4100},
+      dashboard: %Config.Dashboard{port: 4000},
       workflows: [
         %Config.Workflow{
           name: "api",
           workflow: "C:/repos/api/WORKFLOW.md",
-          port: 4101
+          port: 4001
         }
       ]
     }

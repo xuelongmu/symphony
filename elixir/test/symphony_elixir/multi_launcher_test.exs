@@ -35,6 +35,13 @@ defmodule SymphonyElixir.MultiLauncherTest do
            ] = Launcher.child_commands(config, "escript", ["bin/symphony"])
   end
 
+  test "runs child workflows from the directory containing their workflow file" do
+    opts = Launcher.port_options_for_test(["--version"], @workflow)
+
+    assert Keyword.fetch!(opts, :cd) == "C:/repos/api"
+    assert Keyword.fetch!(opts, :args) == ["--version"]
+  end
+
   test "tracks running workflows and exit status" do
     parent = self()
     process_ref = make_ref()

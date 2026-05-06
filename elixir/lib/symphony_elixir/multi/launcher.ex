@@ -164,14 +164,13 @@ defmodule SymphonyElixir.Multi.Launcher do
   defp maybe_append(args, _switch, nil), do: args
   defp maybe_append(args, switch, value), do: args ++ [switch, value]
 
-  defp default_open_process(command, args, _workflow) do
+  @doc false
+  @spec port_options_for_test([String.t()], Config.Workflow.t()) :: list()
+  def port_options_for_test(args, workflow), do: port_options(args, workflow)
+
+  defp default_open_process(command, args, workflow) do
     port =
-      Port.open({:spawn_executable, command}, [
-        :binary,
-        :exit_status,
-        :stderr_to_stdout,
-        args: args
-      ])
+      Port.open({:spawn_executable, command}, port_options(args, workflow))
 
     {:ok, port}
   rescue
@@ -187,6 +186,16 @@ defmodule SymphonyElixir.Multi.Launcher do
   end
 
   defp default_close_process(_process), do: :ok
+
+  defp port_options(args, workflow) do
+    [
+      :binary,
+      :exit_status,
+      :stderr_to_stdout,
+      args: args,
+      cd: Path.dirname(workflow.workflow)
+    ]
+  end
 
   defp close_started_processes(state) do
     Enum.each(Map.keys(state.processes), state.close_process)

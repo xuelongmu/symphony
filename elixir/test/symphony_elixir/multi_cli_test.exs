@@ -65,4 +65,35 @@ defmodule SymphonyElixir.MultiCLITest do
     assert_received {:dashboard_started, 4100, launcher}
     assert launcher == self()
   end
+
+  test "stops launcher when dashboard startup fails" do
+    parent = self()
+    launcher = spawn(fn -> Process.sleep(:infinity) end)
+
+    config = %Config{
+      dashboard: %Config.Dashboard{port: 4100},
+      workflows: [
+        %Config.Workflow{
+          name: "api",
+          workflow: "C:/repos/api/WORKFLOW.md",
+          port: 4101
+        }
+      ]
+    }
+
+    deps = %{
+      load_config: fn "CACOPHANY.yml" -> {:ok, config} end,
+      command_parts: fn -> {"escript", ["bin/symphony"]} end,
+      start_launcher: fn _loaded_config, _command, _base_args -> {:ok, launcher} end,
+      start_dashboard: fn _loaded_config, ^launcher -> {:error, {:multi_dashboard_start_failed, :eaddrinuse}} end,
+      stop_launcher: fn ^launcher ->
+        send(parent, :launcher_stopped)
+        Process.exit(launcher, :shutdown)
+      end
+    }
+
+    assert {:error, message} = CLI.evaluate([@ack_flag, "CACOPHANY.yml"], deps)
+    assert message =~ "Failed to start multi-workflow dashboard"
+    assert_received :launcher_stopped
+  end
 end

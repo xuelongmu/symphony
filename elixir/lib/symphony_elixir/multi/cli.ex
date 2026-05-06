@@ -13,7 +13,8 @@ defmodule SymphonyElixir.Multi.CLI do
           optional(:command_parts) => (-> {String.t(), [String.t()]} | {:error, term()}),
           optional(:load_config) => (String.t() -> {:ok, Config.t()} | {:error, term()}),
           optional(:start_launcher) => (Config.t(), String.t(), [String.t()] -> GenServer.on_start()),
-          optional(:start_dashboard) => (Config.t(), pid() -> :ok | {:error, term()})
+          optional(:start_dashboard) => (Config.t(), pid() -> :ok | {:error, term()}),
+          optional(:stop_launcher) => (pid() -> term())
         }
 
   @spec evaluate([String.t()], deps()) :: {:launcher, pid()} | {:error, String.t()}
@@ -24,7 +25,7 @@ defmodule SymphonyElixir.Multi.CLI do
              {:ok, config} <- load_config(config_path, deps),
              {:ok, {command, base_args}} <- command_parts(deps),
              {:ok, launcher} <- start_launcher(config, command, base_args, deps),
-             :ok <- start_dashboard(config, launcher, deps) do
+             :ok <- start_dashboard_or_stop_launcher(config, launcher, deps) do
           print_startup_summary(config)
           {:launcher, launcher}
         else
@@ -101,6 +102,25 @@ defmodule SymphonyElixir.Multi.CLI do
     deps
     |> Map.get(:start_dashboard, &start_dashboard/2)
     |> then(& &1.(config, launcher))
+  end
+
+  defp start_dashboard_or_stop_launcher(config, launcher, deps) do
+    case start_dashboard(config, launcher, deps) do
+      :ok ->
+        :ok
+
+      {:error, _reason} = error ->
+        stop_launcher(launcher, deps)
+        error
+    end
+  end
+
+  defp stop_launcher(launcher, deps) do
+    deps
+    |> Map.get(:stop_launcher, &GenServer.stop/1)
+    |> then(& &1.(launcher))
+  catch
+    :exit, _reason -> :ok
   end
 
   defp start_dashboard(%Config{dashboard: %{port: port}}, launcher) when is_integer(port) do

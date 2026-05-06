@@ -49,6 +49,62 @@ defmodule SymphonyElixir.MultiDashboardPlugTest do
     assert [%{child_state: %{available: false, error: ":econnrefused"}}] = payload.workflows
   end
 
+  test "includes child running issue states in aggregate payload and hub HTML" do
+    request_fun = fn _url, _opts ->
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "counts" => %{"running" => 1, "retrying" => 1, "past_sessions" => 0},
+           "generated_at" => "2026-05-06T00:00:01Z",
+           "running" => [
+             %{
+               "issue_identifier" => "github-animus-agent-16",
+               "tracker_url" => "https://github.com/animus-intelligence/animus-agent/issues/16",
+               "state" => "In progress"
+             }
+           ],
+           "retrying" => [
+             %{
+               "issue_identifier" => "github-animus-agent-40",
+               "tracker_url" => "https://github.com/animus-intelligence/animus-agent/issues/40"
+             }
+           ]
+         }
+       }}
+    end
+
+    payload =
+      DashboardPlug.payload(
+        launcher: :launcher,
+        status_fun: fn :launcher -> @status end,
+        request_fun: request_fun
+      )
+
+    assert [
+             %{
+               child_state: %{
+                 running: [%{"issue_identifier" => "github-animus-agent-16", "state" => "In progress"}],
+                 retrying: [%{"issue_identifier" => "github-animus-agent-40"}]
+               }
+             }
+           ] = payload.workflows
+
+    conn =
+      :get
+      |> conn("/")
+      |> DashboardPlug.call(
+        launcher: :launcher,
+        status_fun: fn :launcher -> @status end,
+        request_fun: request_fun
+      )
+
+    assert conn.resp_body =~ "github-animus-agent-16"
+    assert conn.resp_body =~ "Issue status: In progress"
+    assert conn.resp_body =~ "github-animus-agent-40"
+    assert conn.resp_body =~ "Issue status: Retrying"
+  end
+
   test "starts Req before polling child dashboards with the default request function" do
     parent = self()
 

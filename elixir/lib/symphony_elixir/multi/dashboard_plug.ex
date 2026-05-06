@@ -113,6 +113,8 @@ defmodule SymphonyElixir.Multi.DashboardPlug do
         %{
           available: true,
           counts: map_get(body, "counts"),
+          running: map_get(body, "running") || [],
+          retrying: map_get(body, "retrying") || [],
           generated_at: map_get(body, "generated_at")
         }
 
@@ -165,6 +167,10 @@ defmodule SymphonyElixir.Multi.DashboardPlug do
           a.link { color: #1f6feb; text-decoration: none; font-size: 13px; }
           .counts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
           .count { background: #f2f5f9; border-radius: 6px; padding: 7px 9px; font-size: 12px; color: #2d3748; }
+          .tasks { display: grid; gap: 8px; margin: 14px 0 4px; }
+          .task { border: 1px solid #e5eaf2; border-radius: 6px; padding: 8px 10px; background: #fbfcfe; display: grid; gap: 3px; }
+          .task a, .task-id { color: #172033; text-decoration: none; font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+          .task-state { color: #566174; font-size: 12px; }
           @media (max-width: 720px) {
             header { display: grid; align-items: start; }
             .summary { justify-content: flex-start; }
@@ -220,10 +226,11 @@ defmodule SymphonyElixir.Multi.DashboardPlug do
 
   defp render_child_counts(nil), do: ""
 
-  defp render_child_counts(%{available: true, counts: counts}) when is_map(counts) do
+  defp render_child_counts(%{available: true, counts: counts} = child_state) when is_map(counts) do
     running = map_get(counts, "running") || 0
     retrying = map_get(counts, "retrying") || 0
     past_sessions = map_get(counts, "past_sessions") || 0
+    active_tasks = render_child_tasks(child_state)
 
     """
     <div class="counts">
@@ -231,6 +238,7 @@ defmodule SymphonyElixir.Multi.DashboardPlug do
       <span class="count">Retrying #{html_escape(to_string(retrying))}</span>
       <span class="count">Past #{html_escape(to_string(past_sessions))}</span>
     </div>
+    #{active_tasks}
     """
   end
 
@@ -243,6 +251,54 @@ defmodule SymphonyElixir.Multi.DashboardPlug do
   end
 
   defp render_child_counts(_child_state), do: ""
+
+  defp render_child_tasks(child_state) do
+    tasks =
+      []
+      |> Kernel.++(task_rows(map_get(child_state, "running"), "Running", true))
+      |> Kernel.++(task_rows(map_get(child_state, "retrying"), "Retrying", false))
+
+    case tasks do
+      [] ->
+        ""
+
+      tasks ->
+        """
+        <div class="tasks">
+          #{Enum.join(tasks, "\n")}
+        </div>
+        """
+    end
+  end
+
+  defp task_rows(tasks, status, include_issue_state?) when is_list(tasks) do
+    Enum.map(tasks, &render_task_row(&1, status, include_issue_state?))
+  end
+
+  defp task_rows(_tasks, _status, _include_issue_state?), do: []
+
+  defp render_task_row(task, status, include_issue_state?) when is_map(task) do
+    identifier = task_identifier(task)
+    tracker_url = map_get(task, "tracker_url")
+    state = if include_issue_state?, do: map_get(task, "state") || "unknown", else: status
+
+    """
+    <div class="task">
+      #{task_link(identifier, tracker_url)}
+      <span class="task-state">Issue status: #{html_escape(to_string(state))}</span>
+    </div>
+    """
+  end
+
+  defp task_identifier(task) do
+    map_get(task, "issue_identifier") || map_get(task, "issue_id") || "unknown issue"
+  end
+
+  defp task_link(identifier, tracker_url) when is_binary(tracker_url) and tracker_url != "" do
+    ~s(<a href="#{html_escape(tracker_url)}">#{html_escape(to_string(identifier))}</a>)
+  end
+
+  defp task_link(identifier, _tracker_url), do: ~s(<span class="task-id">#{html_escape(to_string(identifier))}</span>)
 
   defp dashboard_link(nil), do: ~s(<span class="label">No dashboard port configured</span>)
 

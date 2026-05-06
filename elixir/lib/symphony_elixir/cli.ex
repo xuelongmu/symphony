@@ -4,17 +4,20 @@ defmodule SymphonyElixir.CLI do
   """
 
   alias SymphonyElixir.LogFile
+  alias SymphonyElixir.Multi.CLI, as: CacophanyCLI
 
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
   @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer]
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
+  @type evaluate_result :: :ok | {:launcher, pid()} | {:error, String.t()}
   @type deps :: %{
-          file_regular?: (String.t() -> boolean()),
-          set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
-          set_logs_root: (String.t() -> :ok | {:error, term()}),
-          set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
-          ensure_all_started: (-> ensure_started_result())
+          required(:file_regular?) => (String.t() -> boolean()),
+          required(:set_workflow_file_path) => (String.t() -> :ok | {:error, term()}),
+          required(:set_logs_root) => (String.t() -> :ok | {:error, term()}),
+          required(:set_server_port_override) => (non_neg_integer() | nil -> :ok | {:error, term()}),
+          required(:ensure_all_started) => (-> ensure_started_result()),
+          optional(:cacophany_evaluate) => ([String.t()] -> {:launcher, pid()} | {:error, String.t()})
         }
 
   @spec main([String.t()]) :: no_return()
@@ -23,14 +26,30 @@ defmodule SymphonyElixir.CLI do
       :ok ->
         wait_for_shutdown()
 
+      {:launcher, launcher} ->
+        CacophanyCLI.wait_for_shutdown(launcher)
+
       {:error, message} ->
         IO.puts(:stderr, message)
         System.halt(1)
     end
   end
 
-  @spec evaluate([String.t()], deps()) :: :ok | {:error, String.t()}
+  @spec evaluate([String.t()], deps()) :: evaluate_result()
   def evaluate(args, deps \\ runtime_deps()) do
+    case args do
+      ["cacophany" | cacophany_args] ->
+        deps
+        |> Map.get(:cacophany_evaluate, &CacophanyCLI.evaluate/1)
+        |> then(& &1.(cacophany_args))
+
+      _ ->
+        evaluate_single(args, deps)
+    end
+  end
+
+  @spec evaluate_single([String.t()], deps()) :: :ok | {:error, String.t()}
+  defp evaluate_single(args, deps) do
     case OptionParser.parse(args, strict: @switches) do
       {opts, [], []} ->
         with :ok <- require_guardrails_acknowledgement(opts),
@@ -72,7 +91,7 @@ defmodule SymphonyElixir.CLI do
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]"
+    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]\n       symphony cacophany --i-understand-that-this-will-be-running-without-the-usual-guardrails path-to-CACOPHANY.yml"
   end
 
   @spec runtime_deps() :: deps()

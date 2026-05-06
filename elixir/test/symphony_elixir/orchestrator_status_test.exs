@@ -117,6 +117,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              message: %{method: "some-event"},
              timestamp: now
            }
+
+    assert [
+             %{event: :notification, message: %{method: "some-event"}, timestamp: ^now},
+             %{event: :session_started, message: nil, timestamp: ^now}
+           ] = snapshot_entry.recent_codex_messages
   end
 
   test "orchestrator can stop a running issue session by identifier" do

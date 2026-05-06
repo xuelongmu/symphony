@@ -130,6 +130,7 @@ defmodule SymphonyElixirWeb.Presenter do
       turn_count: Map.get(entry, :turn_count, 0),
       last_event: entry.last_codex_event,
       last_message: summarize_message(entry.last_codex_message),
+      recent_events: recent_events_payload(entry),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(entry.last_codex_timestamp),
       tokens: %{
@@ -167,6 +168,7 @@ defmodule SymphonyElixirWeb.Presenter do
       turn_count: Map.get(entry, :turn_count, 0),
       last_event: entry.last_codex_event,
       last_message: summarize_message(entry.last_codex_message),
+      recent_events: recent_events_payload(entry),
       started_at: iso8601(entry.started_at),
       ended_at: iso8601(entry.ended_at),
       last_event_at: iso8601(entry.last_codex_timestamp),
@@ -190,6 +192,7 @@ defmodule SymphonyElixirWeb.Presenter do
       started_at: iso8601(running.started_at),
       last_event: running.last_codex_event,
       last_message: summarize_message(running.last_codex_message),
+      recent_events: recent_events_payload(running),
       last_event_at: iso8601(running.last_codex_timestamp),
       tokens: %{
         input_tokens: running.codex_input_tokens,
@@ -221,14 +224,36 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp recent_events_payload(running) do
-    [
-      %{
-        at: iso8601(running.last_codex_timestamp),
-        event: running.last_codex_event,
-        message: summarize_message(running.last_codex_message)
-      }
-    ]
-    |> Enum.reject(&is_nil(&1.at))
+    case Map.get(running, :recent_codex_messages) do
+      messages when is_list(messages) and messages != [] ->
+        Enum.map(messages, &recent_event_payload/1)
+
+      _ ->
+        [
+          %{
+            at: iso8601(running.last_codex_timestamp),
+            event: running.last_codex_event,
+            message: summarize_message(running.last_codex_message)
+          }
+        ]
+        |> Enum.reject(&is_nil(&1.at))
+    end
+  end
+
+  defp recent_event_payload(message) when is_map(message) do
+    %{
+      at: iso8601(Map.get(message, :timestamp) || Map.get(message, "timestamp")),
+      event: Map.get(message, :event) || Map.get(message, "event"),
+      message: summarize_message(message)
+    }
+  end
+
+  defp recent_event_payload(message) do
+    %{
+      at: nil,
+      event: nil,
+      message: summarize_message(message)
+    }
   end
 
   defp summarize_message(nil), do: nil

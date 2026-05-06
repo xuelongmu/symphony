@@ -387,6 +387,51 @@ pre,
   white-space: nowrap;
 }
 
+.event-history {
+  margin-top: 0.28rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(9, 11, 10, 0.52);
+}
+
+.event-history summary {
+  padding: 0.38rem 0.55rem;
+  color: var(--accent-ink);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.event-history ol {
+  display: grid;
+  gap: 0.55rem;
+  max-height: 18rem;
+  margin: 0;
+  padding: 0.2rem 0.65rem 0.7rem 1.55rem;
+  overflow: auto;
+}
+
+.event-history li {
+  padding-left: 0.1rem;
+}
+
+.event-history-message,
+.event-history-meta {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.event-history-message {
+  color: var(--ink);
+  line-height: 1.38;
+}
+
+.event-history-meta {
+  margin-top: 0.1rem;
+  font-size: 0.78rem;
+}
+
 .state-badge {
   display: inline-flex;
   align-items: center;
